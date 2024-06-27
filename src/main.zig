@@ -515,7 +515,104 @@ fn run_tests() !void {
         fiber.go(&fiber_test, .{});
         while (fiber.number_of_fibers_active() > 1) {}
     }
+    //profiler
+    {
+        profiler.start_profiler();
+        defer {
+            profiler.end_profiler();
+            const stats = profiler.compute_statistics_of_current_state(arena);
+            toolbox.println("Total time: {}ms", .{stats.total_elapsed.milliseconds()});
+            for (stats.section_statistics.items()) |stat| {
+                toolbox.assert(
+                    stat.max_time_elapsed_without_children.ticks >= stat.min_time_elapsed_without_children.ticks,
+                    "Max time elapsed: {}mcs < Min time elapsed: {}mcs",
+                    .{ stat.max_time_elapsed_without_children.ticks, stat.min_time_elapsed_without_children.ticks },
+                );
+                toolbox.assert(
+                    stat.time_elapsed_with_children.ticks >= stat.time_elapsed_without_children.ticks,
+                    "Time elapsed with children: {}mcs < time elapsed without children: {}mcs",
+                    .{ stat.time_elapsed_with_children.ticks, stat.time_elapsed_without_children.ticks },
+                );
+                toolbox.assert(
+                    stat.time_elapsed_without_children.ticks >= stat.max_time_elapsed_without_children.ticks,
+                    "Max time elapsed without children: {}mcs >= total time elapsed without children: {}mcs",
+                    .{ stat.max_time_elapsed_without_children.ticks, stat.time_elapsed_without_children.ticks },
+                );
+                toolbox.assert(
+                    stat.time_elapsed_without_children.ticks >= stat.min_time_elapsed_without_children.ticks,
+                    "Min time elapsed without children: {}mcs >= total time elapsed with children: {}mcs",
+                    .{ stat.min_time_elapsed_without_children.ticks, stat.time_elapsed_without_children.ticks },
+                );
+                toolbox.assert(
+                    stat.time_elapsed_with_children.ticks >= 0,
+                    "Time elapsed with children was negative: {}mcs",
+                    .{stat.time_elapsed_with_children.ticks},
+                );
+                toolbox.assert(
+                    stat.time_elapsed_without_children.ticks >= 0,
+                    "Time elapsed without children was negative: {}mcs",
+                    .{stat.time_elapsed_without_children.ticks},
+                );
+                toolbox.assert(
+                    stat.max_time_elapsed_without_children.ticks >= 0,
+                    "Max time elapsed without children was negative: {}mcs",
+                    .{stat.max_time_elapsed_without_children.ticks},
+                );
+                toolbox.assert(
+                    stat.min_time_elapsed_without_children.ticks >= 0,
+                    "Min time elapsed without children was negative: {}mcs",
+                    .{stat.min_time_elapsed_without_children.ticks},
+                );
+                toolbox.println_str8(stat.str8(arena));
+            }
+        }
+
+        profiler.begin("Parent Section");
+        for (0..10000) |_| {
+            profiler.begin("Nested");
+            asm volatile (
+                \\nop
+                \\nop
+                \\nop
+                \\nop
+                \\nop
+            );
+            profiler.end();
+        }
+        profiler_fn1(20);
+        profiler.end();
+    }
     toolbox.println("\nAll tests passed!", .{});
+}
+fn profiler_fn1(n: isize) void {
+    profiler.begin("Fn1");
+    defer profiler.end();
+    if (n <= 0) {
+        return;
+    }
+    asm volatile (
+        \\nop
+        \\nop
+        \\nop
+        \\nop
+        \\nop
+    );
+    profiler_fn2(n);
+}
+fn profiler_fn2(n: isize) void {
+    profiler.begin("Fn2");
+    defer profiler.end();
+
+    profiler_fn1(n - 1);
+    for (0..10000) |_| {
+        asm volatile (
+            \\nop
+            \\nop
+            \\nop
+            \\nop
+            \\nop
+        );
+    }
 }
 fn fiber_test() void {
     for (1..10) |i| {
