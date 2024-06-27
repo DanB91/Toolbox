@@ -113,8 +113,6 @@ fn BaseHashMap(comptime Key: type, comptime Value: type, comptime is_pointer_sta
         }
 
         pub fn get(self: *Self, key: Key) ?Value {
-            toolbox.profiler.begin("Hash Map get");
-            defer toolbox.profiler.end();
             if (self.len() == 0) {
                 return null;
             }
