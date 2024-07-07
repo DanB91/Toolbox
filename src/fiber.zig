@@ -5,16 +5,14 @@ const builtin = @import("builtin");
 
 const MAX_FIBER_ARGUMENTS = 2;
 
-const IS_M_SERIES_MAC = builtin.os.tag == .macos and builtin.cpu.arch.isAARCH64();
-const IS_PLAYDATE_HARDWARE = builtin.os.tag == .freestanding and builtin.cpu.arch.isThumb();
-const Registers = if (IS_M_SERIES_MAC)
+const Registers = if (toolbox.IS_M_SERIES_MAC)
     extern struct {
         x19_to_x30: [12]u64 align(8),
         d8_to_d15: [8]u64 align(8),
         sp: u64 align(8),
         arguments: [MAX_FIBER_ARGUMENTS]u64 align(8),
     }
-else if (IS_PLAYDATE_HARDWARE)
+else if (toolbox.IS_PLAYDATE_HARDWARE)
     //Playdate
     extern struct {
         r4_to_r11: [8]u32 align(4),
@@ -96,9 +94,9 @@ pub fn go(f: anytype, args: anytype) void {
         @compileError("More than " ++ MAX_FIBER_ARGUMENTS ++ " arguments not supported");
     }
 
-    if (comptime IS_M_SERIES_MAC) {
+    if (comptime toolbox.IS_M_SERIES_MAC) {
         go_macos(f, args);
-    } else if (comptime IS_PLAYDATE_HARDWARE) {
+    } else if (comptime toolbox.IS_PLAYDATE_HARDWARE) {
         go_playdate(f, args);
     } else {
         @compileError("Fibers unsupported on this platform!");
@@ -212,7 +210,7 @@ inline fn current_fiber() *Fiber {
 
 extern fn switch_fibers(new: *Registers, old: *Registers) void;
 comptime {
-    if (IS_M_SERIES_MAC) {
+    if (toolbox.IS_M_SERIES_MAC) {
         asm (
             \\.global _switch_fibers
             \\_switch_fibers:
@@ -260,7 +258,7 @@ comptime {
             \\
             \\   ret x4
         );
-    } else if (IS_PLAYDATE_HARDWARE) {
+    } else if (toolbox.IS_PLAYDATE_HARDWARE) {
         asm (
             \\.type switch_fibers, %function
             \\switch_fibers:

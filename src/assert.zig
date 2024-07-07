@@ -21,3 +21,6 @@ pub fn expect(cond: bool, comptime fmt: []const u8, args: anytype) void {
         toolbox.panic("UEXPECTED CONDITION: " ++ fmt, args);
     }
 }
+pub fn expecteq(expected: anytype, actual: anytype, comptime message: []const u8) void {
+    expect(expected == actual, message ++ " -- Expected: {any}, Actual: {any}", .{ expected, actual });
+}

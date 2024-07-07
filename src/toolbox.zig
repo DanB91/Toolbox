@@ -19,7 +19,6 @@ pub usingnamespace @import("panic.zig");
 
 pub const fiber = @import("fiber.zig");
 pub const profiler = @import("profiler.zig");
-
 const builtin = @import("builtin");
 const build_flags = @import("build_flags");
 const root = @import("root");
@@ -37,6 +36,12 @@ pub const Platform = enum {
     UEFI,
     WASM,
 };
+
+//These define the hardware we are on.  Used for hardware specific quirks
+pub const IS_M_SERIES_MAC = builtin.os.tag == .macos and builtin.cpu.arch.isAARCH64();
+pub const IS_PC = builtin.cpu.arch == .x86_64;
+pub const IS_PLAYDATE_HARDWARE = builtin.os.tag == .freestanding and builtin.cpu.arch.isThumb();
+
 pub const THIS_PLATFORM = if (@hasDecl(root, "THIS_PLATFORM"))
     root.THIS_PLATFORM
 else switch (builtin.os.tag) {

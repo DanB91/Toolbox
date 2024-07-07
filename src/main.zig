@@ -42,17 +42,17 @@ fn run_tests() !void {
         const string_slice: []const u8 = "Hello!";
 
         //iterable tests
-        toolbox.assert(toolbox.is_iterable([]u8), "Byte slice should be iterable!", .{});
-        toolbox.assert(!toolbox.is_iterable(i), "Number should not be iterable!", .{});
-        toolbox.assert(!toolbox.is_iterable(&i), "Address-of number should not be iterable!", .{});
-        toolbox.assert(toolbox.is_iterable("This is iterable"), "String should be iterable!", .{});
-        toolbox.assert(toolbox.is_iterable(string_slice), "String should be iterable!", .{});
+        toolbox.expect(toolbox.is_iterable([]u8), "Byte slice should be iterable!", .{});
+        toolbox.expect(!toolbox.is_iterable(i), "Number should not be iterable!", .{});
+        toolbox.expect(!toolbox.is_iterable(&i), "Address-of number should not be iterable!", .{});
+        toolbox.expect(toolbox.is_iterable("This is iterable"), "String should be iterable!", .{});
+        toolbox.expect(toolbox.is_iterable(string_slice), "String should be iterable!", .{});
 
         //single pointer tests
-        toolbox.assert(!toolbox.is_single_pointer(i), "Number should not be a single pointer!", .{});
-        toolbox.assert(toolbox.is_single_pointer(&i), "Address-of should be a single pointer!", .{});
-        toolbox.assert(toolbox.is_single_pointer("Strings are single pointers to arrays"), "Strings should be a single pointer to arrays", .{});
-        toolbox.assert(!toolbox.is_single_pointer(string_slice), "Slices should not be a single pointer", .{});
+        toolbox.expect(!toolbox.is_single_pointer(i), "Number should not be a single pointer!", .{});
+        toolbox.expect(toolbox.is_single_pointer(&i), "Address-of should be a single pointer!", .{});
+        toolbox.expect(toolbox.is_single_pointer("Strings are single pointers to arrays"), "Strings should be a single pointer to arrays", .{});
+        toolbox.expect(!toolbox.is_single_pointer(string_slice), "Slices should not be a single pointer", .{});
     }
 
     //memory tests
@@ -61,10 +61,10 @@ fn run_tests() !void {
         {
             const num_bytes = toolbox.mb(1);
             const data = toolbox.os_allocate_memory(num_bytes);
-            toolbox.asserteq(num_bytes, data.len, "Wrong number of bytes allocated");
-            toolbox.assert(toolbox.is_aligned_to(@intFromPtr(data.ptr), toolbox.PAGE_SIZE), "System allocated memory should be page aligned", .{});
+            toolbox.expecteq(num_bytes, data.len, "Wrong number of bytes allocated");
+            toolbox.expect(toolbox.is_aligned_to(@intFromPtr(data.ptr), toolbox.PAGE_SIZE), "System allocated memory should be page aligned", .{});
             //os allocator should returned zero'ed memory
-            for (data) |b| toolbox.asserteq(b, 0, "Memory should be zeroed from system allocator");
+            for (data) |b| toolbox.expecteq(b, 0, "Memory should be zeroed from system allocator");
 
             for (data) |*b| b.* = 0xFF;
             toolbox.os_free_memory(data);
@@ -74,15 +74,15 @@ fn run_tests() !void {
         var arena = toolbox.Arena.init(arena_size);
         //test init arena
         {
-            toolbox.asserteq(0, arena.pos, "Arena should have initial postion of 0");
-            toolbox.asserteq(arena_size - @sizeOf(toolbox.Arena) - @sizeOf(std.mem.Allocator.VTable), arena.data.len, "Wrong arena capacity");
+            toolbox.expecteq(0, arena.pos, "Arena should have initial postion of 0");
+            toolbox.expecteq(arena_size - @sizeOf(toolbox.Arena) - @sizeOf(std.mem.Allocator.VTable), arena.data.len, "Wrong arena capacity");
         }
 
         //test push_bytes_unaligned
         const num_bytes = toolbox.kb(4);
         {
             const bytes = arena.push_bytes_unaligned(num_bytes);
-            toolbox.asserteq(num_bytes, bytes.len, "Wrong number of bytes allocated");
+            toolbox.expecteq(num_bytes, bytes.len, "Wrong number of bytes allocated");
 
             for (bytes) |*b| b.* = 0xFF;
         }
@@ -90,29 +90,91 @@ fn run_tests() !void {
         const num_longs = 1024;
         {
             const longs = arena.push_slice(u64, num_longs);
-            toolbox.asserteq(num_longs, longs.len, "Wrong number of longs");
+            toolbox.expecteq(num_longs, longs.len, "Wrong number of longs");
 
             for (longs) |*b| b.* = 0xFFFF_FFFF_FFFF_FFFF;
         }
         //test total_bytes_used and reset
         {
-            toolbox.asserteq(num_longs * 8 + num_bytes, arena.total_bytes_used(), "Wrong number of bytes used");
+            toolbox.expecteq(num_longs * 8 + num_bytes, arena.total_bytes_used(), "Wrong number of bytes used");
             arena.reset();
-            toolbox.asserteq(0, arena.total_bytes_used(), "Arena should be reset");
+            toolbox.expecteq(0, arena.total_bytes_used(), "Arena should be reset");
         }
         //test save points
         {
             const longs = arena.push_slice(u64, num_longs);
-            toolbox.asserteq(num_longs * 8, arena.total_bytes_used(), "Wrong number of bytes used");
-            toolbox.asserteq(num_longs, longs.len, "Wrong number of longs");
+            toolbox.expecteq(num_longs * 8, arena.total_bytes_used(), "Wrong number of bytes used");
+            toolbox.expecteq(num_longs, longs.len, "Wrong number of longs");
             const save_point = arena.create_save_point();
             defer {
                 arena.restore_save_point(save_point);
-                toolbox.asserteq(num_longs * 8, arena.total_bytes_used(), "Wrong number of bytes used after restoring save point");
+                toolbox.expecteq(num_longs * 8, arena.total_bytes_used(), "Wrong number of bytes used after restoring save point");
             }
             const longs2 = arena.push_slice(u64, num_longs);
-            toolbox.asserteq(num_longs * 8 * 2, arena.total_bytes_used(), "Wrong number of bytes used");
-            toolbox.asserteq(num_longs, longs2.len, "Wrong number of longs used");
+            toolbox.expecteq(num_longs * 8 * 2, arena.total_bytes_used(), "Wrong number of bytes used");
+            toolbox.expecteq(num_longs, longs2.len, "Wrong number of longs used");
+        }
+        //test scratch arena
+        {
+            const scratch_arena_0 = toolbox.get_scratch_arena(null);
+
+            defer {
+                const src_str = "12345678";
+                const dest_str = scratch_arena_0.push_slice(u8, src_str.len);
+                @memcpy(dest_str, src_str);
+                toolbox.expect(
+                    std.mem.eql(u8, dest_str, src_str),
+                    "scratch arena not working with basic copy",
+                    .{},
+                );
+                scratch_arena_0.restore();
+            }
+            {
+                const src_str = "12345678";
+                const dest_str = scratch_arena_0.push_slice(u8, src_str.len);
+                @memcpy(dest_str, src_str);
+                toolbox.expect(
+                    std.mem.eql(u8, dest_str, src_str),
+                    "scratch arena not working with basic copy",
+                    .{},
+                );
+            }
+            {
+                const scratch_arena_1 = toolbox.get_scratch_arena(scratch_arena_0);
+                defer {
+                    const src_str = "abcdefg";
+                    const dest_str = scratch_arena_1.push_slice(u8, src_str.len);
+                    @memcpy(dest_str, src_str);
+                    toolbox.expect(
+                        std.mem.eql(u8, dest_str, src_str),
+                        "scratch arena not working with basic copy",
+                        .{},
+                    );
+                    scratch_arena_1.restore();
+                }
+                {
+                    const src_str = "abcdefg";
+                    const dest_str = scratch_arena_1.push_slice(u8, src_str.len);
+                    @memcpy(dest_str, src_str);
+                    toolbox.expect(
+                        std.mem.eql(u8, dest_str, src_str),
+                        "scratch arena not working with basic copy",
+                        .{},
+                    );
+                }
+                const scratch_arena_0a = toolbox.get_scratch_arena(scratch_arena_1);
+                defer scratch_arena_0a.restore();
+                {
+                    const src_str = "こんにちは!";
+                    const dest_str = scratch_arena_0a.push_slice(u8, src_str.len);
+                    @memcpy(dest_str, src_str);
+                    toolbox.expect(
+                        std.mem.eql(u8, dest_str, src_str),
+                        "scratch arena not working with basic copy",
+                        .{},
+                    );
+                }
+            }
         }
         //pool allocator
         {
@@ -146,22 +208,22 @@ fn run_tests() !void {
         defer arena.reset();
         var list = toolbox.LinkedListQueue(i64).init(arena);
         const first_element = list.push(42);
-        toolbox.assert(list.len == 1, "List should be length 1", .{});
-        toolbox.assert(first_element.* == 42, "Node should have a value of 42", .{});
-        toolbox.assert(&list.head.?.value == first_element, "List head should be the same as the first node", .{});
-        toolbox.assert(&list.tail.?.value == first_element, "List tail should be the same as its only node", .{});
+        toolbox.expect(list.len == 1, "List should be length 1", .{});
+        toolbox.expect(first_element.* == 42, "Node should have a value of 42", .{});
+        toolbox.expect(&list.head.?.value == first_element, "List head should be the same as the first node", .{});
+        toolbox.expect(&list.tail.?.value == first_element, "List tail should be the same as its only node", .{});
 
         const second_element = list.push(42 * 2);
         _ = list.push(42 * 3);
 
-        toolbox.assert(list.len == 3, "List should be length 3", .{});
-        toolbox.assert(&list.head.?.value == first_element, "List head should be the same as the first node", .{});
+        toolbox.expect(list.len == 3, "List should be length 3", .{});
+        toolbox.expect(&list.head.?.value == first_element, "List head should be the same as the first node", .{});
 
         {
             var i: i64 = 1;
             var it = list.iterator();
             while (it.next()) |value| {
-                toolbox.assert(
+                toolbox.expect(
                     value.* == 42 * i,
                     "Value for linked list node is wrong. Expected: {}, Actual: {} ",
                     .{ 42 * i, value.* },
@@ -171,12 +233,12 @@ fn run_tests() !void {
         }
 
         const last_value = list.pop();
-        toolbox.assert(last_value == 42 * 1, "Pop gave wrong value", .{});
-        toolbox.assert(&list.head.?.value == second_element, "first_element should be removed", .{});
-        toolbox.assert(list.len == 2, "List should be length 2 after removal", .{});
+        toolbox.expect(last_value == 42 * 1, "Pop gave wrong value", .{});
+        toolbox.expect(&list.head.?.value == second_element, "first_element should be removed", .{});
+        toolbox.expect(list.len == 2, "List should be length 2 after removal", .{});
 
         list.clear();
-        toolbox.assert(list.len == 0 and list.head == null and list.tail == null, "clear list didn't clear", .{});
+        toolbox.expect(list.len == 0 and list.head == null and list.tail == null, "clear list didn't clear", .{});
     }
 
     //Linked list stack
@@ -189,7 +251,7 @@ fn run_tests() !void {
             var i: i64 = 3;
             var it = list.iterator();
             while (it.next()) |value| {
-                toolbox.assert(
+                toolbox.expect(
                     value.* == 42 * i,
                     "Value for linked list node is wrong. Expected: {}, Actual: {} ",
                     .{ 42 * i, value.* },
@@ -204,24 +266,24 @@ fn run_tests() !void {
         defer arena.reset();
         var list = toolbox.RandomRemovalLinkedList(i64).init(arena);
         const first_element = list.append(42);
-        toolbox.assert(list.len == 1, "List should be length 1", .{});
-        toolbox.assert(first_element.* == 42, "Node should have a value of 42", .{});
-        toolbox.assert(&list.head.?.value == first_element, "List head should be the same as the first node", .{});
-        toolbox.assert(&list.tail.?.value == first_element, "List tail should be the same as its only node", .{});
+        toolbox.expect(list.len == 1, "List should be length 1", .{});
+        toolbox.expect(first_element.* == 42, "Node should have a value of 42", .{});
+        toolbox.expect(&list.head.?.value == first_element, "List head should be the same as the first node", .{});
+        toolbox.expect(&list.tail.?.value == first_element, "List tail should be the same as its only node", .{});
 
         const second_element = list.append(42 * 2);
         const third_element = list.append(42 * 3);
 
-        toolbox.assert(list.len == 3, "List should be length 3", .{});
-        toolbox.assert(second_element.* == 42 * 2, "Second element is wrong value", .{});
-        toolbox.assert(third_element.* == 42 * 3, "Third element is wrong value", .{});
-        toolbox.assert(&list.head.?.value == first_element, "List head should be the same as the first node", .{});
+        toolbox.expect(list.len == 3, "List should be length 3", .{});
+        toolbox.expect(second_element.* == 42 * 2, "Second element is wrong value", .{});
+        toolbox.expect(third_element.* == 42 * 3, "Third element is wrong value", .{});
+        toolbox.expect(&list.head.?.value == first_element, "List head should be the same as the first node", .{});
 
         {
             var i: i64 = 1;
             var it = list.iterator();
             while (it.next()) |value| {
-                toolbox.assert(
+                toolbox.expect(
                     value.* == 42 * i,
                     "Value for linked list node is wrong. Expected: {}, Actual: {} ",
                     .{ 42 * i, value.* },
@@ -231,12 +293,12 @@ fn run_tests() !void {
         }
 
         list.remove(second_element);
-        toolbox.assert(list.len == 2, "List should be length 2", .{});
+        toolbox.expect(list.len == 2, "List should be length 2", .{});
         {
             var i: i64 = 1;
             var it = list.iterator();
             while (it.next()) |value| {
-                toolbox.assert(
+                toolbox.expect(
                     value.* == 42 * i,
                     "Value for linked list node is wrong. Expected: {}, Actual: {} ",
                     .{ 42 * i, value.* },
@@ -246,13 +308,13 @@ fn run_tests() !void {
         }
 
         const zeroth_element = list.prepend(42 * 0);
-        toolbox.assert(list.len == 3, "List should be length 3", .{});
-        toolbox.assert(zeroth_element.* == 42 * 0, "0th element is wrong value", .{});
+        toolbox.expect(list.len == 3, "List should be length 3", .{});
+        toolbox.expect(zeroth_element.* == 42 * 0, "0th element is wrong value", .{});
         {
             var i: i64 = 0;
             var it = list.iterator();
             while (it.next()) |value| {
-                toolbox.assert(
+                toolbox.expect(
                     value.* == 42 * i,
                     "Value for linked list node is wrong. Expected: {}, Actual: {} ",
                     .{ 42 * i, value.* },
@@ -273,41 +335,41 @@ fn run_tests() !void {
         map.put("PCs", 8765);
 
         var data = map.get("Blah");
-        toolbox.asserteq(null, data, "Hash map retrieval is wrong!");
+        toolbox.expecteq(null, data, "Hash map retrieval is wrong!");
         data = map.get("Macs");
-        toolbox.asserteq(123, data.?, "Hash map retrieval is wrong!");
+        toolbox.expecteq(123, data.?, "Hash map retrieval is wrong!");
         data = map.get("Apple IIs");
-        toolbox.asserteq(432, data.?, "Hash map retrieval is wrong!");
+        toolbox.expecteq(432, data.?, "Hash map retrieval is wrong!");
         data = map.get("PCs");
-        toolbox.asserteq(8765, data.?, "Hash map retrieval is wrong!");
+        toolbox.expecteq(8765, data.?, "Hash map retrieval is wrong!");
 
         map.put("PCs", 87654);
         data = map.get("PCs");
-        toolbox.assert(data.? == 87654, "Hash map retrieval is wrong! Expected: {}, Got: {any}", .{ 87654, data });
+        toolbox.expect(data.? == 87654, "Hash map retrieval is wrong! Expected: {}, Got: {any}", .{ 87654, data });
 
-        toolbox.assert(map.len() == 3, "Hash map len is wrong! Expected: {}, Got: {}", .{ 3, map.len() });
+        toolbox.expect(map.len() == 3, "Hash map len is wrong! Expected: {}, Got: {}", .{ 3, map.len() });
         map.remove("PCs");
         data = map.get("PCs");
-        toolbox.asserteq(null, data, "Hash map retrieval is wrong!");
-        toolbox.asserteq(2, map.len(), "Hash map len is wrong!");
+        toolbox.expecteq(null, data, "Hash map retrieval is wrong!");
+        toolbox.expecteq(2, map.len(), "Hash map len is wrong!");
 
         data = map.get("Garbage");
-        toolbox.asserteq(null, data, "Hash map retrieval is wrong!");
+        toolbox.expecteq(null, data, "Hash map retrieval is wrong!");
 
         //collision keys
         map.put("GReLUrM4wMqfg9yzV3KQ", 654);
         map.put("8yn0iYCKYHlIj4-BwPqk", 234);
         data = map.get("GReLUrM4wMqfg9yzV3KQ");
-        toolbox.asserteq(654, data.?, "Hash map retrieval is wrong!");
+        toolbox.expecteq(654, data.?, "Hash map retrieval is wrong!");
         data = map.get("8yn0iYCKYHlIj4-BwPqk");
-        toolbox.asserteq(234, data.?, "Hash map retrieval is wrong!");
+        toolbox.expecteq(234, data.?, "Hash map retrieval is wrong!");
 
         map.remove("GReLUrM4wMqfg9yzV3KQ");
-        toolbox.asserteq(3, map.len(), "Hash map len is wrong!");
+        toolbox.expecteq(3, map.len(), "Hash map len is wrong!");
         data = map.get("GReLUrM4wMqfg9yzV3KQ");
-        toolbox.asserteq(null, data, "Hash map retrieval is wrong!");
+        toolbox.expecteq(null, data, "Hash map retrieval is wrong!");
         data = map.get("8yn0iYCKYHlIj4-BwPqk");
-        toolbox.asserteq(234, data.?, "Hash map retrieval is wrong!");
+        toolbox.expecteq(234, data.?, "Hash map retrieval is wrong!");
     }
 
     //numerial hashmap
@@ -320,13 +382,13 @@ fn run_tests() !void {
         map.put(456, 8765);
 
         var data = map.get(543);
-        toolbox.asserteq(null, data, "Hash map retrieval is wrong!");
+        toolbox.expecteq(null, data, "Hash map retrieval is wrong!");
         data = map.get(123);
-        toolbox.asserteq(123, data.?, "Hash map retrieval is wrong!");
+        toolbox.expecteq(123, data.?, "Hash map retrieval is wrong!");
         data = map.get(432);
-        toolbox.asserteq(432, data.?, "Hash map retrieval is wrong!");
+        toolbox.expecteq(432, data.?, "Hash map retrieval is wrong!");
         data = map.get(456);
-        toolbox.asserteq(8765, data.?, "Hash map retrieval is wrong!");
+        toolbox.expecteq(8765, data.?, "Hash map retrieval is wrong!");
     }
     //numerial hashmap
     {
@@ -343,13 +405,13 @@ fn run_tests() !void {
         keys[2] = 0;
 
         var data = map.get(&keys[3]);
-        toolbox.asserteq(null, data, "Hash map retrieval is wrong!");
+        toolbox.expecteq(null, data, "Hash map retrieval is wrong!");
         data = map.get(&keys[0]);
-        toolbox.asserteq(123, data.?, "Hash map retrieval is wrong!");
+        toolbox.expecteq(123, data.?, "Hash map retrieval is wrong!");
         data = map.get(&keys[1]);
-        toolbox.asserteq(432, data.?, "Hash map retrieval is wrong!");
+        toolbox.expecteq(432, data.?, "Hash map retrieval is wrong!");
         data = map.get(&keys[2]);
-        toolbox.asserteq(8765, data.?, "Hash map retrieval is wrong!");
+        toolbox.expecteq(8765, data.?, "Hash map retrieval is wrong!");
     }
     //string
     {
@@ -359,10 +421,10 @@ fn run_tests() !void {
 
         const buffer = [_]u8{ 'H', 'e', 'l', 'l', 'o', '!' };
         const runtime_english = toolbox.str8(buffer[0..]);
-        toolbox.asserteq(6, english.rune_length, "Wrong rune length");
-        toolbox.asserteq(6, runtime_english.rune_length, "Wrong rune length");
-        toolbox.asserteq(6, korean.rune_length, "Wrong rune length");
-        toolbox.asserteq(6, japanese.rune_length, "Wrong rune length");
+        toolbox.expecteq(6, english.rune_length, "Wrong rune length");
+        toolbox.expecteq(6, runtime_english.rune_length, "Wrong rune length");
+        toolbox.expecteq(6, korean.rune_length, "Wrong rune length");
+        toolbox.expecteq(6, japanese.rune_length, "Wrong rune length");
 
         {
             var it = japanese.iterator();
@@ -379,7 +441,7 @@ fn run_tests() !void {
                     else => toolbox.panic("Wrong number of runes!", .{}),
                 };
                 i += 1;
-                toolbox.asserteq(expected, rune, "Wrong rune!");
+                toolbox.expecteq(expected, rune, "Wrong rune!");
             }
         }
 
@@ -387,10 +449,10 @@ fn run_tests() !void {
         {
             const s = toolbox.str8lit("hello!");
             const ss = s.substring(1, 3);
-            toolbox.asserteq(2, ss.rune_length, "Wrong rune length");
-            toolbox.asserteq(2, ss.bytes.len, "Wrong byte length");
-            toolbox.asserteq(ss.bytes[0], 'e', "Wrong char at index 0");
-            toolbox.asserteq(ss.bytes[1], 'l', "Wrong char at index 1");
+            toolbox.expecteq(2, ss.rune_length, "Wrong rune length");
+            toolbox.expecteq(2, ss.bytes.len, "Wrong byte length");
+            toolbox.expecteq(ss.bytes[0], 'e', "Wrong char at index 0");
+            toolbox.expecteq(ss.bytes[1], 'l', "Wrong char at index 1");
         }
 
         //contains
@@ -400,9 +462,9 @@ fn run_tests() !void {
             const not_substring1 = toolbox.str8lit("ll!");
             const not_substring2 = toolbox.str8lit("hello!!!!");
 
-            toolbox.asserteq(s.contains(substring), true, "Should contain");
-            toolbox.asserteq(s.contains(not_substring1), false, "Should not contain");
-            toolbox.asserteq(s.contains(not_substring2), false, "Should not contain");
+            toolbox.expecteq(s.contains(substring), true, "Should contain");
+            toolbox.expecteq(s.contains(not_substring1), false, "Should not contain");
+            toolbox.expecteq(s.contains(not_substring2), false, "Should not contain");
         }
     }
     //stack
@@ -419,7 +481,7 @@ fn run_tests() !void {
         var it = ring_queue.iterator();
         var expected: i64 = 3;
         while (it.next()) |got| {
-            toolbox.assert(
+            toolbox.expect(
                 expected == got,
                 "Unexpected ring queue value.  Expected: {}, Got: {}",
                 .{ expected, got },
@@ -437,7 +499,7 @@ fn run_tests() !void {
         }
         var expected: i64 = 2;
         while (ring_queue.dequeue()) |got| {
-            toolbox.assert(
+            toolbox.expect(
                 expected == got,
                 "Unexpected ring queue value.  Expected: {}, Got: {}",
                 .{ expected, got },
@@ -462,7 +524,7 @@ fn run_tests() !void {
         var consumers: [NUM_CONSUMERS]std.Thread = undefined;
         var max_value_dequeued = [_]i64{0} ** NUM_PRODUCERS;
         var ring_queue =
-            toolbox.MultiProducerMultiConsumerRingQueue(TestData).init(8, arena);
+            toolbox.MultiProducerMultiConsumerRingQueue(TestData).init(64, arena);
 
         for (&producers, 0..) |*p, i| {
             producers_running += 1;
@@ -488,19 +550,19 @@ fn run_tests() !void {
         for (consumers) |c| {
             c.join();
         }
-        toolbox.assert(
+        toolbox.expect(
             ring_queue.used == 0,
             "Expected no used ring queue entries.  Was: {}",
             .{ring_queue.used},
         );
-        toolbox.assert(
+        toolbox.expect(
             ring_queue.free == ring_queue.data.len,
             "Expected all ring queue entries to be free.  Was: {}",
             .{ring_queue.free},
         );
 
         for (max_value_dequeued, 0..) |n, i| {
-            toolbox.assert(
+            toolbox.expect(
                 n == MAX_VALUE_DEQUEUED,
                 "Expected max value dequeued to be for thread {}: {X}, but was {X} ",
                 .{ i, MAX_VALUE_DEQUEUED, n },
@@ -523,42 +585,42 @@ fn run_tests() !void {
             const stats = profiler.compute_statistics_of_current_state(arena);
             toolbox.println("Total time: {}ms", .{stats.total_elapsed.milliseconds()});
             for (stats.section_statistics.items()) |stat| {
-                toolbox.assert(
+                toolbox.expect(
                     stat.max_time_elapsed_without_children.ticks >= stat.min_time_elapsed_without_children.ticks,
                     "Max time elapsed: {}mcs < Min time elapsed: {}mcs",
                     .{ stat.max_time_elapsed_without_children.ticks, stat.min_time_elapsed_without_children.ticks },
                 );
-                toolbox.assert(
+                toolbox.expect(
                     stat.time_elapsed_with_children.ticks >= stat.time_elapsed_without_children.ticks,
                     "Time elapsed with children: {}mcs < time elapsed without children: {}mcs",
                     .{ stat.time_elapsed_with_children.ticks, stat.time_elapsed_without_children.ticks },
                 );
-                toolbox.assert(
+                toolbox.expect(
                     stat.time_elapsed_without_children.ticks >= stat.max_time_elapsed_without_children.ticks,
                     "Max time elapsed without children: {}mcs >= total time elapsed without children: {}mcs",
                     .{ stat.max_time_elapsed_without_children.ticks, stat.time_elapsed_without_children.ticks },
                 );
-                toolbox.assert(
+                toolbox.expect(
                     stat.time_elapsed_without_children.ticks >= stat.min_time_elapsed_without_children.ticks,
                     "Min time elapsed without children: {}mcs >= total time elapsed with children: {}mcs",
                     .{ stat.min_time_elapsed_without_children.ticks, stat.time_elapsed_without_children.ticks },
                 );
-                toolbox.assert(
+                toolbox.expect(
                     stat.time_elapsed_with_children.ticks >= 0,
                     "Time elapsed with children was negative: {}mcs",
                     .{stat.time_elapsed_with_children.ticks},
                 );
-                toolbox.assert(
+                toolbox.expect(
                     stat.time_elapsed_without_children.ticks >= 0,
                     "Time elapsed without children was negative: {}mcs",
                     .{stat.time_elapsed_without_children.ticks},
                 );
-                toolbox.assert(
+                toolbox.expect(
                     stat.max_time_elapsed_without_children.ticks >= 0,
                     "Max time elapsed without children was negative: {}mcs",
                     .{stat.max_time_elapsed_without_children.ticks},
                 );
-                toolbox.assert(
+                toolbox.expect(
                     stat.min_time_elapsed_without_children.ticks >= 0,
                     "Min time elapsed without children was negative: {}mcs",
                     .{stat.min_time_elapsed_without_children.ticks},
@@ -646,9 +708,9 @@ fn concurrent_queue_dequeue_test_loop(
             const thread_id: usize = test_data.thread_id;
             const actual = test_data.n;
 
-            toolbox.assert(
+            toolbox.expect(
                 actual > last_actual[thread_id],
-                \\Unexpected ring queue value.  Expected greater than: {}, Was: {}, Thread: {} \n
+                \\Unexpected ring queue value.  Expected greater than: {}, Was: {}, Thread: {}
                 \\used: {}, free: {}, rcursor: {}, wcursor: {}, reserved_rcursor: {}, reserved_wcursor: {} 
             ,
                 .{

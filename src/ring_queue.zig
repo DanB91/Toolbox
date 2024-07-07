@@ -148,7 +148,7 @@ pub fn MultiProducerMultiConsumerRingQueue(comptime T: type) type {
         pub fn enqueue(self: *Self, value: T) bool {
             const NUMBER_OF_ITEMS = 1;
             while (true) {
-                const wcursor = @atomicLoad(usize, &self.wcursor, .acquire);
+                const wcursor = @atomicLoad(usize, &self.reserved_wcursor, .acquire);
                 if (@atomicLoad(isize, &self.free, .monotonic) < NUMBER_OF_ITEMS) {
                     return false;
                 }
@@ -164,8 +164,15 @@ pub fn MultiProducerMultiConsumerRingQueue(comptime T: type) type {
                     .monotonic,
                 ) == null) {
                     self.data[wcursor] = value;
-                    while (@atomicLoad(usize, &self.wcursor, .acquire) != wcursor) {}
-                    _ = @atomicStore(usize, &self.wcursor, next_wcursor, .release);
+                    @fence(.release);
+                    while (@cmpxchgStrong(
+                        usize,
+                        &self.wcursor,
+                        wcursor,
+                        next_wcursor,
+                        .acquire,
+                        .monotonic,
+                    ) != null) {}
                     _ = @atomicRmw(isize, &self.used, .Add, NUMBER_OF_ITEMS, .monotonic);
 
                     return true;
@@ -188,8 +195,8 @@ pub fn MultiProducerMultiConsumerRingQueue(comptime T: type) type {
         pub fn dequeue(self: *Self) ?T {
             const NUMBER_OF_ITEMS = 1;
             while (true) {
-                const rcursor = @atomicLoad(usize, &self.rcursor, .acquire);
-                if (@atomicLoad(isize, &self.used, .monotonic) < NUMBER_OF_ITEMS) {
+                const rcursor = @atomicLoad(usize, &self.reserved_rcursor, .monotonic);
+                if (@atomicLoad(isize, &self.used, .acquire) < NUMBER_OF_ITEMS) {
                     return null;
                 }
                 var next_rcursor = rcursor;
@@ -204,8 +211,15 @@ pub fn MultiProducerMultiConsumerRingQueue(comptime T: type) type {
                     .monotonic,
                 ) == null) {
                     const ret = self.data[rcursor];
-                    while (@atomicLoad(usize, &self.rcursor, .acquire) != rcursor) {}
-                    @atomicStore(usize, &self.rcursor, next_rcursor, .release);
+                    @fence(.release);
+                    while (@cmpxchgStrong(
+                        usize,
+                        &self.rcursor,
+                        rcursor,
+                        next_rcursor,
+                        .acquire,
+                        .monotonic,
+                    ) != null) {}
                     _ = @atomicRmw(isize, &self.free, .Add, NUMBER_OF_ITEMS, .monotonic);
 
                     return ret;

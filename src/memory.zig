@@ -11,71 +11,6 @@ pub const PAGE_SIZE = switch (toolbox.THIS_PLATFORM) {
     .BoksOS, .Wozmon64 => toolbox.mb(2),
     .WASM => toolbox.kb(64),
 };
-
-pub fn PoolAllocator(comptime T: type) type {
-    return struct {
-        elements: []Element,
-        next_index: usize = 0,
-        elements_allocated: usize = 0,
-
-        const Self = @This();
-        const Element = struct {
-            data: T = undefined,
-            in_use: bool = false,
-        };
-
-        pub fn init(number_of_elements: usize, arena: *Arena) PoolAllocator(T) {
-            const ret = PoolAllocator(T){
-                .elements = arena.push_slice_clear(Element, number_of_elements),
-            };
-            return ret;
-        }
-
-        pub fn alloc(self: *Self) *T {
-            const start = self.next_index;
-            var element = &self.elements[self.next_index];
-            while (element.in_use) {
-                self.next_index += 1;
-                self.next_index %= self.elements.len;
-                element = &self.elements[self.next_index];
-
-                if (self.next_index == start) {
-                    toolbox.panic("Pool allocator is full!", .{});
-                }
-            }
-            element.in_use = true;
-            if (comptime toolbox.IS_DEBUG) {
-                const to_alloc_address = @intFromPtr(&element.data);
-                const elements_address = @intFromPtr(self.elements.ptr);
-                toolbox.assert(
-                    to_alloc_address >= elements_address and to_alloc_address < elements_address + self.elements.len * @sizeOf(Element),
-                    "Invalid address of element to allocate: {x}. Element pool address: {x}",
-                    .{ to_alloc_address, elements_address },
-                );
-            }
-
-            self.elements_allocated += 1;
-
-            return &element.data;
-        }
-
-        pub fn free(self: *Self, to_free: *T) void {
-            if (comptime toolbox.IS_DEBUG) {
-                const to_free_address = @intFromPtr(to_free);
-                const elements_address = @intFromPtr(self.elements.ptr);
-                toolbox.assert(
-                    to_free_address >= elements_address and to_free_address < elements_address + self.elements.len * @sizeOf(Element),
-                    "Invalid address of element to free: {x}. Element pool address: {x}",
-                    .{ to_free_address, elements_address },
-                );
-                @memset(@as([*]u8, @ptrCast(to_free))[0..@sizeOf(T)], undefined);
-            }
-            var element: *Element = @fieldParentPtr("data", to_free);
-            element.in_use = false;
-            self.elements_allocated -= 1;
-        }
-    };
-}
 pub const Arena = struct {
     data: []u8,
 
@@ -110,11 +45,15 @@ pub const Arena = struct {
             .zstd_allocator = undefined,
         };
         const ret = tmp_arena.push(Arena);
-        const zstd_allocator = tmp_arena.create_zstd_allocator();
+        const vtable = tmp_arena.push(std.mem.Allocator.VTable);
+        vtable.* = ZSTD_VTABLE;
         ret.* = .{
             .data = data[tmp_arena.pos..],
             .to_free = data,
-            .zstd_allocator = zstd_allocator,
+            .zstd_allocator = .{
+                .ptr = ret,
+                .vtable = vtable,
+            },
         };
         return ret;
     }
@@ -128,10 +67,14 @@ pub const Arena = struct {
             .zstd_allocator = undefined,
         };
         const ret = tmp_arena.push(Arena);
-        const zstd_allocator = tmp_arena.create_zstd_allocator();
+        const vtable = tmp_arena.push(std.mem.Allocator.VTable);
+        vtable.* = ZSTD_VTABLE;
         ret.* = .{
             .data = buffer[tmp_arena.pos..],
-            .zstd_allocator = zstd_allocator,
+            .zstd_allocator = .{
+                .ptr = ret,
+                .vtable = vtable,
+            },
         };
 
         return ret;
@@ -223,14 +166,6 @@ pub const Arena = struct {
         toolbox.panic("Arena allocation request is too large. {} bytes", .{n});
     }
 
-    fn create_zstd_allocator(self: *Arena) std.mem.Allocator {
-        const vtable = self.push(std.mem.Allocator.VTable);
-        vtable.* = ZSTD_VTABLE;
-        return .{
-            .ptr = self,
-            .vtable = vtable,
-        };
-    }
     /// Attempt to allocate exactly `len` bytes aligned to `1 << ptr_align`.
     ///
     /// `ret_addr` is optionally provided as the first return address of the
@@ -337,7 +272,7 @@ pub const Arena = struct {
     pub fn restore_save_point(arena: *Arena, save_point: SavePoint) void {
         if (toolbox.IS_DEBUG) {
             toolbox.assert(save_point <= arena.pos, "Save point should be before arena position", .{});
-            @memset(arena.data[save_point..arena.pos], undefined);
+            @memset(arena.data[save_point..arena.pos], 0xAA);
         }
         arena.pos = save_point;
     }
@@ -352,6 +287,111 @@ pub const Arena = struct {
         }
     }
 };
+pub fn get_scratch_arena(conflict_arena_opt: ?*toolbox.Arena) *toolbox.Arena {
+    const SCRATCH_ARENA_SIZE = if (comptime !toolbox.IS_PLAYDATE_HARDWARE) toolbox.mb(4) else toolbox.kb(32);
+
+    const ThreadLocalVars = if (comptime !toolbox.IS_PLAYDATE_HARDWARE)
+        struct {
+            threadlocal var scratch_arenas: [2]?*Arena = [_]?*Arena{null} ** 2;
+        }
+    else
+        struct {
+            var scratch_arenas: [2]?*Arena = [_]?*Arena{null} ** 2;
+        };
+    for (ThreadLocalVars.scratch_arenas, 0..) |arena_opt, i| {
+        if (arena_opt) |arena| {
+            if (conflict_arena_opt) |conflict_arena| {
+                if (arena == conflict_arena) {
+                    const ret_index = i ^ 1;
+                    const ret_opt = ThreadLocalVars.scratch_arenas[ret_index];
+                    if (ret_opt) |ret| {
+                        ret.save();
+                        return ret;
+                    } else {
+                        const ret = toolbox.Arena.init(SCRATCH_ARENA_SIZE);
+                        ThreadLocalVars.scratch_arenas[ret_index] = ret;
+                        ret.save();
+                        return ret;
+                    }
+                }
+            } else {
+                arena.save();
+                return arena;
+            }
+        } else {
+            const ret = toolbox.Arena.init(SCRATCH_ARENA_SIZE);
+            ThreadLocalVars.scratch_arenas[i] = ret;
+            ret.save();
+            return ret;
+        }
+    }
+    unreachable;
+}
+
+pub fn PoolAllocator(comptime T: type) type {
+    return struct {
+        elements: []Element,
+        next_index: usize = 0,
+        elements_allocated: usize = 0,
+
+        const Self = @This();
+        const Element = struct {
+            data: T = undefined,
+            in_use: bool = false,
+        };
+
+        pub fn init(number_of_elements: usize, arena: *Arena) PoolAllocator(T) {
+            const ret = PoolAllocator(T){
+                .elements = arena.push_slice_clear(Element, number_of_elements),
+            };
+            return ret;
+        }
+
+        pub fn alloc(self: *Self) *T {
+            const start = self.next_index;
+            var element = &self.elements[self.next_index];
+            while (element.in_use) {
+                self.next_index += 1;
+                self.next_index %= self.elements.len;
+                element = &self.elements[self.next_index];
+
+                if (self.next_index == start) {
+                    toolbox.panic("Pool allocator is full!", .{});
+                }
+            }
+            element.in_use = true;
+            if (comptime toolbox.IS_DEBUG) {
+                const to_alloc_address = @intFromPtr(&element.data);
+                const elements_address = @intFromPtr(self.elements.ptr);
+                toolbox.assert(
+                    to_alloc_address >= elements_address and to_alloc_address < elements_address + self.elements.len * @sizeOf(Element),
+                    "Invalid address of element to allocate: {x}. Element pool address: {x}",
+                    .{ to_alloc_address, elements_address },
+                );
+            }
+
+            self.elements_allocated += 1;
+
+            return &element.data;
+        }
+
+        pub fn free(self: *Self, to_free: *T) void {
+            if (comptime toolbox.IS_DEBUG) {
+                const to_free_address = @intFromPtr(to_free);
+                const elements_address = @intFromPtr(self.elements.ptr);
+                toolbox.assert(
+                    to_free_address >= elements_address and to_free_address < elements_address + self.elements.len * @sizeOf(Element),
+                    "Invalid address of element to free: {x}. Element pool address: {x}",
+                    .{ to_free_address, elements_address },
+                );
+                @memset(@as([*]u8, @ptrCast(to_free))[0..@sizeOf(T)], 0xAA);
+            }
+            var element: *Element = @fieldParentPtr("data", to_free);
+            element.in_use = false;
+            self.elements_allocated -= 1;
+        }
+    };
+}
 
 pub fn os_allocate_object(comptime T: type) *T {
     const memory = platform_allocate_memory(@sizeOf(T));
