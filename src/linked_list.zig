@@ -1,285 +1,153 @@
 const toolbox = @import("toolbox.zig");
 
-pub fn LinkedListStack(comptime T: type) type {
-    return LinkedListDeque(T, .Stack);
+const CT = toolbox.ChildType;
+
+pub fn llnext(cursor: anytype) CT(@TypeOf(cursor)) {
+    if (cursor.*) |node| {
+        cursor.* = node.next;
+        return node;
+    }
+    return null;
+}
+pub fn llappend_value(
+    list: anytype,
+    value: anytype,
+    arena: *toolbox.Arena,
+    free_list: anytype,
+) *@TypeOf(value) {
+    const node = llalloc_node(@TypeOf(value), arena, free_list);
+    node.* = value;
+    llappend(list, node);
+    return node;
+}
+pub fn llappend(
+    list: anytype,
+    node: anytype,
+) void {
+    if (list.tail) |t| {
+        t.next = node;
+    } else {
+        list.head = node;
+    }
+    node.prev = list.tail;
+    list.tail = node;
+
+    list.len += 1;
+}
+pub fn llprepend_value(
+    list: anytype,
+    value: anytype,
+    arena: *toolbox.Arena,
+    free_list: anytype,
+) *@TypeOf(value) {
+    const node = llalloc_node(@TypeOf(value), arena, free_list);
+    node.* = value;
+    llprepend(list, node);
+    return node;
+}
+pub fn llprepend(
+    list: anytype,
+    node: anytype,
+) void {
+    if (list.head == null) {
+        list.tail = node;
+    }
+    list.head = node;
+
+    list.len += 1;
 }
 
-pub fn LinkedListQueue(comptime T: type) type {
-    return LinkedListDeque(T, .Queue);
-}
-
-fn LinkedListDeque(comptime T: type, comptime stack_or_queue: enum { Stack, Queue }) type {
-    return struct {
-        head: ?*Node = null,
-        tail: ?*Node = null,
-        len: usize = 0,
-        free_list: ?*Node = null,
-
-        arena: ?*toolbox.Arena = null,
-
-        pub const Iterator = struct {
-            cursor: ?*Node,
-            i: usize,
-            len: usize,
-            pub fn next(self: *Iterator) ?*T {
-                if (self.cursor) |cursor| {
-                    const ret = &cursor.value;
-                    self.cursor = cursor.next;
-                    if (toolbox.IS_DEBUG) {
-                        self.i += 1;
-                    }
-                    return ret;
-                } else {
-                    toolbox.assert(self.i == self.len, "Linked List length is wrong!", .{});
-                    return null;
-                }
+pub fn llremove(
+    list: anytype,
+    node: anytype,
+    free_list: anytype,
+) void {
+    defer {
+        list.len -= 1;
+        llfree_node(node, free_list);
+    }
+    if (node == list.head) {
+        list.head = node.next;
+        if (list.head) |head| {
+            head.prev = null;
+        }
+        if (node == list.tail) {
+            toolbox.assert(list.len == 1, "If head and tail are same, then len should be 1", .{});
+            list.tail = node.prev;
+            if (list.tail) |tail| {
+                tail.next = null;
             }
-        };
-
-        const Self = @This();
-        const Node = struct {
-            next: ?*Node,
-            value: T,
-        };
-
-        pub fn init(arena: *toolbox.Arena) Self {
-            return Self{ .arena = arena };
         }
-        pub inline fn push(self: *Self, value: T) *T {
-            return switch (comptime stack_or_queue) {
-                .Stack => push_stack(self, value),
-                .Queue => push_queue(self, value),
-            };
+        return;
+    }
+    if (node == list.tail) {
+        list.tail = node.prev;
+        if (list.tail) |tail| {
+            tail.next = null;
         }
-
-        fn push_queue(self: *Self, value: T) *T {
-            var to_add = self.alloc_node();
-            to_add.* = .{
-                .value = value,
-                .next = null,
-            };
-            if (self.tail) |t| {
-                t.next = to_add;
-            } else {
-                self.head = to_add;
-            }
-            self.tail = to_add;
-
-            self.len += 1;
-            return &to_add.value;
-        }
-
-        fn push_stack(self: *Self, value: T) *T {
-            var to_add = self.alloc_node();
-            to_add.* = .{
-                .value = value,
-                .next = self.head,
-            };
-            if (self.head == null) {
-                self.tail = to_add;
-            }
-            self.head = to_add;
-
-            self.len += 1;
-            return &to_add.value;
-        }
-
-        pub fn peek_last(self: *Self) ?T {
-            if (self.head) |head| {
-                return head.value;
-            }
-            return null;
-        }
-
-        pub fn pop(self: *Self) T {
-            if (self.head) |head| {
-                const ret = head.value;
-                self.len -= 1;
-                self.head = head.next;
-                if (self.head == null) {
-                    self.tail = null;
-                }
-                self.free_node(head);
-                return ret;
-            }
-            toolbox.panic("Should not pop from an empty deque!", .{});
-        }
-        pub fn clear(self: *Self) void {
-            if (self.head) |head| {
-                var tmp: ?*Node = head;
-                while (tmp) |node| {
-                    tmp = node.next;
-                    self.free_node(node);
-                }
-            }
-            self.head = null;
-            self.tail = null;
-            self.len = 0;
-        }
-
-        pub fn iterator(self: *Self) Iterator {
-            return .{
-                .cursor = self.head,
-                .i = 0,
-                .len = self.len,
-            };
-        }
-        fn alloc_node(self: *Self) *Node {
-            if (self.free_list) |node| {
-                self.free_list = node.next;
-                return node;
-            }
-            if (self.arena) |arena| {
-                return arena.push(Node);
-            }
-
-            toolbox.panic("Pushing to linked list without arena", .{});
-        }
-        fn free_node(self: *Self, node: *Node) void {
-            node.next = self.free_list;
-            self.free_list = node;
-        }
-    };
+        return;
+    }
+    var next = node.next.?;
+    var prev = node.prev.?;
+    prev.next = next;
+    next.prev = prev;
 }
 
 pub fn RandomRemovalLinkedList(comptime T: type) type {
     return struct {
-        head: ?*Node = null,
-        tail: ?*Node = null,
+        head: ?*T = null,
+        tail: ?*T = null,
         len: usize = 0,
-        free_list: ?*Node = null,
-
-        arena: ?*toolbox.Arena = null,
 
         const Self = @This();
-        pub const Node = struct {
-            next: ?*Node = null,
-            prev: ?*Node = null,
-            value: T = undefined,
-        };
+        const FreeList = ?*T;
         pub const Iterator = struct {
-            cursor: ?*Node = null,
-            i: usize = 0,
-            pub fn next(self: *Iterator) ?*T {
-                if (self.cursor) |cursor| {
-                    const ret = &cursor.value;
-                    self.cursor = cursor.next;
-                    if (toolbox.IS_DEBUG) {
-                        self.i += 1;
-                    }
-                    return ret;
-                } else {
-                    return null;
-                }
-            }
-            pub fn next_value(self: *Iterator) ?T {
-                if (self.next()) |ptr| {
-                    return ptr.*;
-                }
-                return null;
+            cursor: ?*T = null,
+            pub inline fn next(self: *Iterator) ?*T {
+                return llnext(&self.cursor);
             }
         };
 
-        pub fn init(arena: *toolbox.Arena) Self {
-            return Self{ .arena = arena };
+        pub inline fn append(self: *Self, node: *T) void {
+            llappend(self, node);
         }
-        pub fn append(self: *Self, value: T) *T {
-            var to_add = self.alloc_node();
-            to_add.* = .{
-                .value = value,
-                .next = null,
-                .prev = self.tail,
-            };
-            if (self.tail) |t| {
-                t.next = to_add;
-            } else {
-                self.head = to_add;
-            }
-            self.tail = to_add;
-
-            self.len += 1;
-            return &to_add.value;
+        pub inline fn append_value(self: *Self, value: T, arena: *toolbox.Arena, free_list: *FreeList) *T {
+            return llappend_value(self, value, arena, free_list);
         }
-        pub fn prepend(self: *Self, value: T) *T {
-            var to_add = self.alloc_node();
-            to_add.* = .{ .value = value, .next = self.head, .prev = null };
-            if (self.head == null) {
-                self.tail = to_add;
-            }
-            self.head = to_add;
-
-            self.len += 1;
-            return &to_add.value;
+        pub inline fn prepend(self: *Self, node: *T) void {
+            llprepend(self, node);
         }
-
-        pub fn remove(self: *Self, to_remove: *T) void {
-            const node: *Node = @fieldParentPtr("value", to_remove);
-            defer {
-                self.len -= 1;
-                self.free_node(node);
-            }
-            if (node == self.head) {
-                self.head = node.next;
-                if (self.head) |head| {
-                    head.prev = null;
-                }
-                if (node == self.tail) {
-                    toolbox.assert(self.len == 1, "If head and tail are same, then len should be 1", .{});
-                    self.tail = node.prev;
-                    if (self.tail) |tail| {
-                        tail.next = null;
-                    }
-                }
-                return;
-            }
-            if (node == self.tail) {
-                self.tail = node.prev;
-                if (self.tail) |tail| {
-                    tail.next = null;
-                }
-                return;
-            }
-            var next = node.next.?;
-            var prev = node.prev.?;
-            prev.next = next;
-            next.prev = prev;
+        pub inline fn prepend_value(self: *Self, value: T, arena: *toolbox.Arena, free_list: *FreeList) *T {
+            return llprepend_value(self, value, arena, free_list);
+        }
+        pub inline fn remove(self: *Self, node: *T, free_list: *FreeList) void {
+            llremove(self, node, free_list);
         }
         pub fn clear(self: *Self) void {
-            self.* = .{ .arena = self.arena };
+            self.* = .{};
         }
-        pub fn clear_and_free(self: *Self) void {
-            if (self.head) |head| {
-                var tmp: ?*Node = head;
-                while (tmp) |node| {
-                    tmp = node.next;
-                    self.free_node(node);
-                }
+        pub fn clear_and_free(self: *Self, free_list: *FreeList) void {
+            var it = self.iterator();
+            while (it.next()) |node| {
+                llfree_node(node, free_list);
             }
-            self.head = null;
-            self.tail = null;
-            self.len = 0;
         }
         pub fn iterator(self: *const Self) Iterator {
             return .{
                 .cursor = self.head,
-                .i = 0,
             };
         }
-
-        fn alloc_node(self: *Self) *Node {
-            if (self.free_list) |node| {
-                self.free_list = node.next;
-                return node;
-            }
-            if (self.arena) |arena| {
-                return arena.push_clear(Node);
-            } else {
-                toolbox.panic("Cannot push new linked list node without arena!", .{});
-            }
-        }
-        fn free_node(self: *Self, node: *Node) void {
-            node.next = self.free_list;
-            self.free_list = node;
-        }
     };
+}
+
+fn llalloc_node(comptime T: type, arena: *toolbox.Arena, free_list: anytype) *T {
+    if (free_list.*) |node| {
+        free_list.* = node.next;
+        return node;
+    }
+    return arena.push(T);
+}
+fn llfree_node(node: anytype, free_list: anytype) void {
+    node.next = free_list.*;
+    free_list.* = node;
 }

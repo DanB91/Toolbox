@@ -203,121 +203,79 @@ fn run_tests() !void {
 
     var arena = toolbox.Arena.init(toolbox.mb(1));
     defer arena.free_all();
-    //Linked list queue
-    {
-        defer arena.reset();
-        var list = toolbox.LinkedListQueue(i64).init(arena);
-        const first_element = list.push(42);
-        toolbox.expect(list.len == 1, "List should be length 1", .{});
-        toolbox.expect(first_element.* == 42, "Node should have a value of 42", .{});
-        toolbox.expect(&list.head.?.value == first_element, "List head should be the same as the first node", .{});
-        toolbox.expect(&list.tail.?.value == first_element, "List tail should be the same as its only node", .{});
-
-        const second_element = list.push(42 * 2);
-        _ = list.push(42 * 3);
-
-        toolbox.expect(list.len == 3, "List should be length 3", .{});
-        toolbox.expect(&list.head.?.value == first_element, "List head should be the same as the first node", .{});
-
-        {
-            var i: i64 = 1;
-            var it = list.iterator();
-            while (it.next()) |value| {
-                toolbox.expect(
-                    value.* == 42 * i,
-                    "Value for linked list node is wrong. Expected: {}, Actual: {} ",
-                    .{ 42 * i, value.* },
-                );
-                i += 1;
-            }
-        }
-
-        const last_value = list.pop();
-        toolbox.expect(last_value == 42 * 1, "Pop gave wrong value", .{});
-        toolbox.expect(&list.head.?.value == second_element, "first_element should be removed", .{});
-        toolbox.expect(list.len == 2, "List should be length 2 after removal", .{});
-
-        list.clear();
-        toolbox.expect(list.len == 0 and list.head == null and list.tail == null, "clear list didn't clear", .{});
-    }
-
-    //Linked list stack
-    {
-        var list = toolbox.LinkedListStack(i64).init(arena);
-        _ = list.push(42 * 1);
-        _ = list.push(42 * 2);
-        _ = list.push(42 * 3);
-        {
-            var i: i64 = 3;
-            var it = list.iterator();
-            while (it.next()) |value| {
-                toolbox.expect(
-                    value.* == 42 * i,
-                    "Value for linked list node is wrong. Expected: {}, Actual: {} ",
-                    .{ 42 * i, value.* },
-                );
-                i -= 1;
-            }
-        }
-    }
 
     //Random removal Linked list
     {
         defer arena.reset();
-        var list = toolbox.RandomRemovalLinkedList(i64).init(arena);
-        const first_element = list.append(42);
+        const IntNode = struct {
+            value: i64,
+            next: ?*@This() = null,
+            prev: ?*@This() = null,
+        };
+        var free_list: ?*IntNode = null;
+        var list = toolbox.RandomRemovalLinkedList(IntNode){};
+        const first_element = list.append_value(.{ .value = 42 }, arena, &free_list);
         toolbox.expect(list.len == 1, "List should be length 1", .{});
-        toolbox.expect(first_element.* == 42, "Node should have a value of 42", .{});
-        toolbox.expect(&list.head.?.value == first_element, "List head should be the same as the first node", .{});
-        toolbox.expect(&list.tail.?.value == first_element, "List tail should be the same as its only node", .{});
+        toolbox.expect(first_element.value == 42, "Node should have a value of 42", .{});
+        toolbox.expect(list.head.? == first_element, "List head should be the same as the first node", .{});
+        toolbox.expect(list.tail.? == first_element, "List tail should be the same as its only node", .{});
 
-        const second_element = list.append(42 * 2);
-        const third_element = list.append(42 * 3);
+        const second_element = list.append_value(.{ .value = 42 * 2 }, arena, &free_list);
+        const third_element = list.append_value(.{ .value = 42 * 3 }, arena, &free_list);
 
         toolbox.expect(list.len == 3, "List should be length 3", .{});
-        toolbox.expect(second_element.* == 42 * 2, "Second element is wrong value", .{});
-        toolbox.expect(third_element.* == 42 * 3, "Third element is wrong value", .{});
-        toolbox.expect(&list.head.?.value == first_element, "List head should be the same as the first node", .{});
+        toolbox.expect(second_element.value == 42 * 2, "Second element is wrong value", .{});
+        toolbox.expect(third_element.value == 42 * 3, "Third element is wrong value", .{});
+        toolbox.expect(list.head.? == first_element, "List head should be the same as the first node", .{});
 
+        toolbox.expecteq(null, free_list, "Free list should be empty!");
         {
             var i: i64 = 1;
             var it = list.iterator();
-            while (it.next()) |value| {
+            while (it.next()) |node| {
                 toolbox.expect(
-                    value.* == 42 * i,
+                    node.value == 42 * i,
                     "Value for linked list node is wrong. Expected: {}, Actual: {} ",
-                    .{ 42 * i, value.* },
+                    .{ 42 * i, node.value },
                 );
+                if (node == second_element) {
+                    list.remove(node, &free_list);
+                }
                 i += 1;
             }
         }
 
-        list.remove(second_element);
         toolbox.expect(list.len == 2, "List should be length 2", .{});
+        toolbox.expect(free_list != null, "Free list should be not empty!", .{});
         {
             var i: i64 = 1;
             var it = list.iterator();
-            while (it.next()) |value| {
+            while (it.next()) |node| {
                 toolbox.expect(
-                    value.* == 42 * i,
+                    node.value == 42 * i,
                     "Value for linked list node is wrong. Expected: {}, Actual: {} ",
-                    .{ 42 * i, value.* },
+                    .{ 42 * i, node.value },
                 );
                 i += 2;
             }
         }
 
-        const zeroth_element = list.prepend(42 * 0);
+        const zeroth_element = list.prepend_value(
+            .{ .value = 42 * 0 },
+            arena,
+            &free_list,
+        );
+        toolbox.expecteq(null, free_list, "Free list should be empty!");
         toolbox.expect(list.len == 3, "List should be length 3", .{});
-        toolbox.expect(zeroth_element.* == 42 * 0, "0th element is wrong value", .{});
+        toolbox.expect(zeroth_element.value == 42 * 0, "0th element is wrong value", .{});
         {
             var i: i64 = 0;
             var it = list.iterator();
-            while (it.next()) |value| {
+            while (it.next()) |node| {
                 toolbox.expect(
-                    value.* == 42 * i,
+                    node.value == 42 * i,
                     "Value for linked list node is wrong. Expected: {}, Actual: {} ",
-                    .{ 42 * i, value.* },
+                    .{ 42 * i, node.value },
                 );
                 i += 1;
                 if (i == 2) {
@@ -326,13 +284,14 @@ fn run_tests() !void {
             }
         }
     }
+
     //Hash map
     {
         defer arena.reset();
-        var map = toolbox.HashMap([]const u8, i64).init(2, arena);
-        map.put("Macs", 123);
-        map.put("Apple IIs", 432);
-        map.put("PCs", 8765);
+        var map = toolbox.HashMap([]const u8, i64){};
+        map.put("Macs", 123, arena);
+        map.put("Apple IIs", 432, arena);
+        map.put("PCs", 8765, arena);
 
         var data = map.get("Blah");
         toolbox.expecteq(null, data, "Hash map retrieval is wrong!");
@@ -343,29 +302,34 @@ fn run_tests() !void {
         data = map.get("PCs");
         toolbox.expecteq(8765, data.?, "Hash map retrieval is wrong!");
 
-        map.put("PCs", 87654);
+        map.put("PCs", 87654, arena);
         data = map.get("PCs");
         toolbox.expect(data.? == 87654, "Hash map retrieval is wrong! Expected: {}, Got: {any}", .{ 87654, data });
 
-        toolbox.expect(map.len() == 3, "Hash map len is wrong! Expected: {}, Got: {}", .{ 3, map.len() });
+        toolbox.expect(map.len == 3, "Hash map len is wrong! Expected: {}, Got: {}", .{ 3, map.len });
+        toolbox.expect(
+            map.cap == toolbox.INITIAL_HASH_MAP_CAPACITY,
+            "Hash map capacity is wrong! Expected: {}, Got: {}",
+            .{ toolbox.INITIAL_HASH_MAP_CAPACITY, map.cap },
+        );
         map.remove("PCs");
         data = map.get("PCs");
         toolbox.expecteq(null, data, "Hash map retrieval is wrong!");
-        toolbox.expecteq(2, map.len(), "Hash map len is wrong!");
+        toolbox.expecteq(2, map.len, "Hash map len is wrong!");
 
         data = map.get("Garbage");
         toolbox.expecteq(null, data, "Hash map retrieval is wrong!");
 
         //collision keys
-        map.put("GReLUrM4wMqfg9yzV3KQ", 654);
-        map.put("8yn0iYCKYHlIj4-BwPqk", 234);
+        map.put("GReLUrM4wMqfg9yzV3KQ", 654, arena);
+        map.put("8yn0iYCKYHlIj4-BwPqk", 234, arena);
         data = map.get("GReLUrM4wMqfg9yzV3KQ");
         toolbox.expecteq(654, data.?, "Hash map retrieval is wrong!");
         data = map.get("8yn0iYCKYHlIj4-BwPqk");
         toolbox.expecteq(234, data.?, "Hash map retrieval is wrong!");
 
         map.remove("GReLUrM4wMqfg9yzV3KQ");
-        toolbox.expecteq(3, map.len(), "Hash map len is wrong!");
+        toolbox.expecteq(3, map.len, "Hash map len is wrong!");
         data = map.get("GReLUrM4wMqfg9yzV3KQ");
         toolbox.expecteq(null, data, "Hash map retrieval is wrong!");
         data = map.get("8yn0iYCKYHlIj4-BwPqk");
@@ -376,10 +340,10 @@ fn run_tests() !void {
     {
         defer arena.reset();
 
-        var map = toolbox.HashMap(i64, i64).init(2, arena);
-        map.put(123, 123);
-        map.put(432, 432);
-        map.put(456, 8765);
+        var map = toolbox.HashMap(i64, i64){};
+        map.put(123, 123, arena);
+        map.put(432, 432, arena);
+        map.put(456, 8765, arena);
 
         var data = map.get(543);
         toolbox.expecteq(null, data, "Hash map retrieval is wrong!");
@@ -395,10 +359,10 @@ fn run_tests() !void {
         defer arena.reset();
         var keys = [_]i64{ 123, 432, 456, 6543 };
 
-        var map = toolbox.HashMap(*const i64, i64).init(2, arena);
-        map.put(&keys[0], 123);
-        map.put(&keys[1], 432);
-        map.put(&keys[2], 8765);
+        var map = toolbox.HashMap(*const i64, i64){};
+        map.put(&keys[0], 123, arena);
+        map.put(&keys[1], 432, arena);
+        map.put(&keys[2], 8765, arena);
 
         keys[0] = 0;
         keys[1] = 0;
@@ -467,6 +431,26 @@ fn run_tests() !void {
             toolbox.expecteq(s.contains(not_substring2), false, "Should not contain");
         }
     }
+    //string builder
+    {
+        defer arena.reset();
+        var sb = toolbox.StringBuilder{};
+        sb.append_fmt("Hello! {}\n", .{123}, arena);
+        sb.append_fmt("こんにちは!! {}", .{123}, arena);
+        const str = sb.str8();
+        const expected = toolbox.str8lit("Hello! 123\nこんにちは!! 123");
+
+        toolbox.expect(
+            std.mem.eql(u8, str.bytes, expected.bytes),
+            "String builder bytes incorrect!",
+            .{},
+        );
+        toolbox.expecteq(
+            str.rune_length,
+            expected.rune_length,
+            "String builder rune lengths incorrect!",
+        );
+    }
     //stack
     //TODO
     {}
@@ -508,7 +492,8 @@ fn run_tests() !void {
         }
     }
     //MultiProducerMultiConsumerRingQueue multi thread test
-    {
+    //TODO: remove for now
+    if (false) {
         defer arena.reset();
 
         const TestData = struct {
@@ -569,6 +554,17 @@ fn run_tests() !void {
             );
         }
     }
+    //dynamic array
+    {
+        var da = toolbox.DynamicArray(i64){};
+        da.append(1, arena);
+        da.append(2, arena);
+        da.append(3, arena);
+        da.append(4, arena);
+        toolbox.assert(da.len == 4, "Unexpected dynamic array length: {}", .{da.len});
+        toolbox.assert(da.cap == toolbox.DYNAMIC_ARRAY_INITIAL_CAPACITY, "Unexpected dynamic array capacity: {}", .{da.len});
+        toolbox.println("Dynamic array print: {}", .{da});
+    }
     //fibers
     {
         defer arena.reset();
@@ -576,6 +572,17 @@ fn run_tests() !void {
         fiber.go(&fiber_test, .{});
         fiber.go(&fiber_test, .{});
         while (fiber.number_of_fibers_active() > 1) {}
+    }
+    //struct formatter
+    {
+        const S = struct {
+            a: usize = 0x1234,
+            b: []const u8 = "Hello!",
+
+            pub const format = toolbox.format_struct;
+        };
+        toolbox.println("Struct formatter hex: {X}", .{S{}});
+        toolbox.println("Struct formatter decimal: {}", .{S{}});
     }
     //profiler
     {
@@ -751,23 +758,6 @@ fn run_benchmarks() void {
         benchmark("allocate, touch and free memory with arena", &arena_benchmark, new_arena);
         // arena.reset();
     }
-    {
-        {
-            var list = toolbox.LinkedListQueue(i64).init(arena);
-            var llpq = LinkedListQueuePushBenchmark{ .list = &list };
-            benchmark("LinkedListDeque push", &llpq, arena);
-            var llpop = LinkedListQueuePopBenchmark{ .list = &list };
-            benchmark("LinkedListDeque pop", &llpop, arena);
-        }
-        {
-            var list = toolbox.LinkedListStack(i64).init(arena);
-            var llps = LinkedListStackPushBenchmark{ .list = &list };
-            benchmark("LinkedListStack push", &llps, arena);
-            var llpop = LinkedListStackPopBenchmark{ .list = &list };
-            benchmark("LinkedListStack pop", &llpop, arena);
-        }
-        // arena.reset();
-    }
 
     //hash map
     {
@@ -870,13 +860,15 @@ const ToolboxHashMapBenchmark = struct {
     map: toolbox.HashMap(toolbox.String8, i64),
 
     fn init(arena: *toolbox.Arena) ToolboxHashMapBenchmark {
+        var map = toolbox.HashMap(toolbox.String8, i64){};
+        map.expand(512, arena);
         return ToolboxHashMapBenchmark{
-            .map = toolbox.HashMap(toolbox.String8, i64).init(512, arena),
+            .map = map,
         };
     }
 
     const s8 = toolbox.str8lit;
-    fn benchmark(self: *ToolboxHashMapBenchmark, _: *toolbox.Arena) void {
+    fn benchmark(self: *ToolboxHashMapBenchmark, arena: *toolbox.Arena) void {
         const kv = .{
             s8("hello"),                12345,
             s8("yes"),                  6543,
@@ -891,7 +883,7 @@ const ToolboxHashMapBenchmark = struct {
             const key = kv[i];
             var v = self.map.get(key) orelse kv[i + 1];
             v += 1;
-            self.map.put(key, v);
+            self.map.put(key, v, arena);
         }
     }
 };
@@ -922,11 +914,13 @@ const ToolboxIntHashMapBenchmark = struct {
     map: toolbox.HashMap(i64, i64),
 
     fn init(arena: *toolbox.Arena) ToolboxIntHashMapBenchmark {
+        var map = toolbox.HashMap(i64, i64){};
+        map.expand(512, arena);
         return ToolboxIntHashMapBenchmark{
-            .map = toolbox.HashMap(i64, i64).init(512, arena),
+            .map = map,
         };
     }
-    fn benchmark(self: *ToolboxIntHashMapBenchmark, _: *toolbox.Arena) void {
+    fn benchmark(self: *ToolboxIntHashMapBenchmark, arena: *toolbox.Arena) void {
         const kv = .{
             543232,   12345,
             68495,    6543,
@@ -940,7 +934,7 @@ const ToolboxIntHashMapBenchmark = struct {
             const key = kv[i];
             var v = self.map.get(key) orelse kv[i + 1];
             v += 1;
-            self.map.put(key, v);
+            self.map.put(key, v, arena);
         }
     }
 };

@@ -140,6 +140,26 @@ pub const String8 = struct {
         try writer.writeAll(value.bytes);
     }
 };
+pub const StringBuilder = struct {
+    bytes: toolbox.DynamicArray(u8) = .{},
+    pub fn append_fmt(
+        builder: *StringBuilder,
+        comptime fmt: []const u8,
+        args: anytype,
+        arena: *toolbox.Arena,
+    ) void {
+        const buffer_len = @as(usize, @intCast(std.fmt.count(fmt, args)));
+        const buffer = arena.push_bytes_unaligned(buffer_len);
+        const bytes = std.fmt.bufPrint(buffer, fmt, args) catch |e|
+            toolbox.panic("Error std.fmt.bufPrint in str8fmt: {}", .{e});
+        builder.bytes.append_slice(bytes, arena);
+    }
+
+    pub fn str8(builder: StringBuilder) toolbox.String8 {
+        return toolbox.str8(builder.bytes.items());
+    }
+};
+
 const RuneIteratorChecked = struct {
     bytes: []const u8,
     cursor: usize = 0,

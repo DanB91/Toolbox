@@ -128,6 +128,9 @@ pub const Arena = struct {
         return self.push_multiple(T, n, true, alignment);
     }
     pub fn push_bytes_unaligned(arena: *Arena, n: usize) []u8 {
+        if (n == 0) {
+            return toolbox.z([]u8);
+        }
         if (arena.data.len - arena.pos >= n) {
             const ret = arena.data[arena.pos .. arena.pos + n];
             arena.pos += n;
@@ -138,6 +141,9 @@ pub const Arena = struct {
         toolbox.panic("Arena allocation request is too large. {} bytes", .{n});
     }
     pub fn push_bytes_aligned(arena: *Arena, n: usize, comptime alignment: usize) []align(alignment) u8 {
+        if (n == 0) {
+            return toolbox.z([]align(alignment) u8);
+        }
         const data_address = @intFromPtr(arena.data.ptr);
         const aligned_address = toolbox.align_up(arena.pos + data_address, alignment);
         const aligned_pos = aligned_address - data_address;
@@ -153,6 +159,9 @@ pub const Arena = struct {
     }
 
     pub fn push_bytes_aligned_runtime(arena: *Arena, n: usize, alignment: usize) []u8 {
+        if (n == 0) {
+            return toolbox.z([]u8);
+        }
         const data_address = @intFromPtr(arena.data.ptr);
         const aligned_address = toolbox.align_up(arena.pos + data_address, alignment);
         const aligned_pos = aligned_address - data_address;

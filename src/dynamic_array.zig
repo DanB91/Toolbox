@@ -1,50 +1,74 @@
 const std = @import("std");
 const toolbox = @import("toolbox.zig");
+
+pub const DYNAMIC_ARRAY_INITIAL_CAPACITY = 32;
 pub fn DynamicArray(comptime T: type) type {
     return struct {
-        store: []T = @as([*]T, undefined)[0..0],
-        _len: usize = 0,
-
-        arena: ?*toolbox.Arena = null,
+        ptr: [*]T = undefined,
+        len: usize = 0,
+        cap: usize = 0,
 
         pub const Child = T;
 
         const Self = @This();
 
-        pub fn init(arena: *toolbox.Arena, capacity: usize) Self {
-            return Self{
-                .arena = arena,
-                .store = arena.push_slice(T, capacity),
-            };
+        pub inline fn items(self: *const Self) []T {
+            return self.ptr[0..self.len];
         }
 
-        pub fn items(self: *const Self) []T {
-            return self.store[0..self._len];
-        }
-
-        pub fn append(self: *Self, value: T) void {
-            if (self._len >= self.store.len) {
-                self.ensure_capacity(@max(16, self.store.len * 2));
+        pub fn append(self: *Self, value: T, arena: *toolbox.Arena) void {
+            const expected_cap = self.len + 1;
+            if (self.cap < expected_cap) {
+                self.expand(@max(
+                    self.cap * 2,
+                    DYNAMIC_ARRAY_INITIAL_CAPACITY,
+                ), arena);
             }
-            self.store[self._len] = value;
-            self._len += 1;
+            self.ptr[self.len] = value;
+            self.len += 1;
         }
-
-        pub fn remove_last(self: *Self) ?T {
-            if (self._len > 0) {
-                const ret = self.items()[self._len - 1];
-                self._len -= 1;
-                return ret;
+        pub fn append_slice(self: *Self, slice: []T, arena: *toolbox.Arena) void {
+            const expected_cap = slice.len + self.len;
+            if (self.cap < expected_cap) {
+                self.expand(@max(
+                    expected_cap * 2,
+                    DYNAMIC_ARRAY_INITIAL_CAPACITY,
+                ), arena);
             }
-            return null;
+            @memcpy(self.ptr[self.len .. self.len + slice.len], slice);
+            self.len += slice.len;
+        }
+        pub fn expand(self: *Self, new_capacity: usize, arena: *toolbox.Arena) void {
+            if (self.cap >= new_capacity) {
+                return;
+            }
+
+            //TODO: optimize if dynamic array was last allocation on arena
+            // {
+            //     const ptr_to_test = arena.data[arena.pos - current_cap * @sizeOf(u8)..].ptr;
+            //     if (ptr_to_test == da.ptr) {}
+            // }
+            const new_buffer = arena.push_slice(T, new_capacity);
+            @memcpy(new_buffer[0..self.len], self.ptr[0..self.len]);
+            self.cap = new_capacity;
+            self.ptr = new_buffer.ptr;
         }
 
-        pub inline fn len(self: *const Self) usize {
-            return self._len;
+        pub fn clone(self: *Self, arena: *toolbox.Arena) Self {
+            const result = Self{};
+            if (self.cap == 0) {
+                return result;
+            }
+            result.expand(self.cap, arena);
+            const src = self.items();
+            @memcpy(result.ptr[0..src.len], src);
+            result.len = src.len;
+
+            return result;
         }
 
-        pub fn clear(self: *Self) void {
-            self._len = 0;
+        pub inline fn clear(self: *Self) void {
+            self.len = 0;
         }
 
         pub const sort = switch (@typeInfo(T)) {
@@ -58,9 +82,28 @@ pub fn DynamicArray(comptime T: type) type {
             .Struct => sort_struct_reverse,
             else => @compileError("Unsupported type " ++ @typeName(T) ++ " for DynamicArray"),
         };
+        pub fn format(
+            self: *const Self,
+            comptime _: []const u8,
+            _: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            try writer.writeAll("{");
+            for (self.items(), 0..) |item, i| {
+                try std.fmt.format(writer, "{}", .{item});
+                if (i < self.len - 1) {
+                    if ((i + 1) % 4 == 0) {
+                        try writer.writeAll(",\n");
+                    } else {
+                        try writer.writeAll(", ");
+                    }
+                }
+            }
+            try writer.writeAll("}");
+        }
 
         fn sort_number(self: *Self) void {
-            std.sort.block(T, self.store[0..self.len()], self, struct {
+            std.sort.block(T, self.items(), self, struct {
                 fn less_than(context: *Self, a: T, b: T) bool {
                     _ = context;
                     return a < b;
@@ -69,7 +112,7 @@ pub fn DynamicArray(comptime T: type) type {
         }
 
         fn sort_struct(self: *Self, comptime field_name: []const u8) void {
-            std.sort.block(T, self.store[0..self.len()], self, struct {
+            std.sort.block(T, self.items(), self, struct {
                 fn less_than(context: *Self, a: T, b: T) bool {
                     _ = context;
                     return @field(a, field_name) < @field(b, field_name);
@@ -78,7 +121,7 @@ pub fn DynamicArray(comptime T: type) type {
         }
 
         fn sort_number_reverse(self: *Self) void {
-            std.sort.block(T, self.store[0..self.len()], self, struct {
+            std.sort.block(T, self.items(), self, struct {
                 fn less_than(context: *Self, a: T, b: T) bool {
                     _ = context;
                     return a > b;
@@ -87,33 +130,12 @@ pub fn DynamicArray(comptime T: type) type {
         }
 
         fn sort_struct_reverse(self: *Self, comptime field_name: []const u8) void {
-            std.sort.block(T, self.store[0..self.len()], self, struct {
+            std.sort.block(T, self.items(), self, struct {
                 fn less_than(context: *Self, a: T, b: T) bool {
                     _ = context;
                     return @field(a, field_name) > @field(b, field_name);
                 }
             }.less_than);
-        }
-
-        pub fn clone(self: *Self, clone_arena: *toolbox.Arena) Self {
-            var ret = Self.init(clone_arena, self.store.len);
-            @memcpy(ret.store, self.store);
-            ret._len = self._len;
-            return ret;
-        }
-
-        fn ensure_capacity(self: *Self, capacity: usize) void {
-            if (capacity <= self.store.len) {
-                return;
-            }
-            if (self.arena) |arena| {
-                const src = self.store;
-                const dest = arena.push_slice(T, capacity);
-                for (src, 0..) |s, i| dest[i] = s;
-                self.store = dest;
-            } else {
-                toolbox.panic("Dynamic array was not initialized", .{});
-            }
         }
     };
 }

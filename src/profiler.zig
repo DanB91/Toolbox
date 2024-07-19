@@ -195,7 +195,7 @@ pub fn compute_statistics(snapshot: *const State, arena: *toolbox.Arena) Statist
     }
 
     const total_elapsed = snapshot.end.subtract(snapshot.start);
-    var section_statistics = toolbox.DynamicArray(SectionStatistics).init(arena, snapshot.sections_used);
+    var section_statistics = toolbox.DynamicArray(SectionStatistics){};
     //index 0 is unused
     for (snapshot.section_store[1 .. snapshot.sections_used + 1]) |section| {
         const percent_of_profiler_total_elapsed = b: {
@@ -234,7 +234,7 @@ pub fn compute_statistics(snapshot: *const State, arena: *toolbox.Arena) Statist
                 .percent_with_children = percent_with_children,
                 .has_children = has_children,
                 .hit_count = section.hit_count,
-            });
+            }, arena);
         } else {
             section_statistics.append(.{
                 .label_store = section.label_store,
@@ -246,7 +246,7 @@ pub fn compute_statistics(snapshot: *const State, arena: *toolbox.Arena) Statist
                 .hit_count = section.hit_count,
                 .time_elapsed_with_children = section.time_elapsed_without_children,
                 .percent_with_children = percent_of_profiler_total_elapsed,
-            });
+            }, arena);
         }
     }
     return .{

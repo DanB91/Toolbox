@@ -1,18 +1,12 @@
 const toolbox = @import("toolbox.zig");
 const std = @import("std");
+pub const INITIAL_HASH_MAP_CAPACITY = 32;
 pub fn HashMap(comptime Key: type, comptime Value: type) type {
-    return BaseHashMap(Key, Value, false);
-}
-pub fn PointerStableHashMap(comptime Key: type, comptime Value: type) type {
-    return BaseHashMap(Key, Value, true);
-}
-fn BaseHashMap(comptime Key: type, comptime Value: type, comptime is_pointer_stable: bool) type {
     return struct {
-        indices: toolbox.RandomRemovalLinkedList(usize) = .{},
-        buckets: []?KeyValue = @as([*]?KeyValue, undefined)[0..0],
-
-        //to keep things consistent with len(), cap() will also be a function
-        _cap: usize = 0,
+        keys: toolbox.DynamicArray(?Key) = .{},
+        values: toolbox.DynamicArray(Value) = .{},
+        len: usize = 0,
+        cap: usize = 0,
 
         //debugging fields
         hash_collisions: usize = 0,
@@ -20,194 +14,169 @@ fn BaseHashMap(comptime Key: type, comptime Value: type, comptime is_pointer_sta
         reprobe_collisions: usize = 0,
         bad_reprobe_collisions: usize = 0,
 
-        arena: ?*toolbox.Arena = null,
-
-        const KeyValue = struct {
+        pub const KeyValue = struct {
             k: Key,
             v: Value,
-            index_node: *usize,
         };
         const Self = @This();
         pub const Iterator = struct {
-            it: toolbox.RandomRemovalLinkedList(usize).Iterator = .{},
-            hash_map: ?*const Self = null,
+            hash_map: *const Self,
+            cursor: usize = 0,
 
-            pub fn next(self: *Iterator) ?*KeyValue {
-                if (self.it.next()) |index| {
-                    return &self.hash_map.?.buckets[index.*].?;
+            pub fn next(self: *Iterator) ?KeyValue {
+                while (self.cursor < self.hash_map.keys.len) : (self.cursor += 1) {
+                    if (self.hash_map.keys.items()[self.cursor]) |key| {
+                        return .{
+                            .k = key,
+                            .v = self.hash_map.values.items()[self.cursor],
+                        };
+                    }
                 }
                 return null;
             }
         };
 
-        pub fn init(initial_capacity: usize, arena: *toolbox.Arena) Self {
-            const num_buckets = toolbox.next_power_of_2(@as(usize, @intFromFloat(@as(f64, @floatFromInt(initial_capacity)) * 1.5)));
-            const buckets = arena.push_slice_clear(?KeyValue, num_buckets);
-            return Self{
-                .indices = toolbox.RandomRemovalLinkedList(usize).init(arena),
-                .buckets = buckets,
-                ._cap = initial_capacity,
-
-                .arena = arena,
-            };
-        }
-        pub inline fn clear(self: *Self) void {
-            self.indices.clear_and_free();
-            for (self.buckets) |*bucket| bucket.* = null;
-        }
-        pub inline fn len(self: *const Self) usize {
-            return self.indices.len;
-        }
-        pub inline fn cap(self: *const Self) usize {
-            return self._cap;
-        }
-
-        pub fn clone(self: *const Self, clone_arena: *toolbox.Arena) Self {
-            var ret = init(self.cap(), clone_arena);
-            for (self.buckets, 0..) |bucket_opt, i| {
-                if (bucket_opt) |bucket| {
-                    const index_node = ret.indices.append(i);
-                    ret.buckets[i] = .{
-                        .k = bucket.k,
-                        .v = bucket.v,
-                        .index_node = index_node,
-                    };
-                }
+        pub fn put(self: *Self, key: Key, value: Value, arena: *toolbox.Arena) void {
+            if (self.cap == 0) {
+                self.expand(INITIAL_HASH_MAP_CAPACITY, arena);
+                const index = self.index_for_key(key);
+                self.keys.items()[index] = key;
+                self.values.items()[index] = value;
+                self.len += 1;
+                return;
             }
-            return ret;
-        }
-        pub fn expand(self: *Self) Self {
-            if (comptime is_pointer_stable) {
-                @panic("Cannot expand a pointer stable hashmap");
-            }
-            if (self.arena) |arena| {
-                var ret = init(self.cap() * 2, arena);
-                for (self.buckets) |bucket_opt| {
-                    if (bucket_opt) |bucket| {
-                        ret.put(bucket.k, bucket.v);
-                    }
-                }
-                return ret;
-            } else {
-                toolbox.panic("Cannot expand hash map with arena!", .{});
-            }
-        }
-
-        pub fn put(self: *Self, key: Key, value: Value) void {
             var index = self.index_for_key(key);
-            const kvptr = &self.buckets[index];
-            if (kvptr.*) |*kv| {
-                kv.v = value;
-            } else if (self.len() == self.cap()) {
-                self.* = self.expand();
-                self.put(key, value);
-            } else {
-                index = self.index_for_key(key);
-                const index_node = self.indices.append(index);
-                kvptr.* = .{
-                    .k = key,
-                    .v = value,
-                    .index_node = index_node,
-                };
+            if (self.keys.items()[index] == null) {
+                if (self.len == self.cap) {
+                    self.expand(self.cap * 2, arena);
+                    index = self.index_for_key(key);
+                }
+                self.keys.items()[index] = key;
+                self.len += 1;
             }
+            self.values.items()[index] = value;
         }
 
         pub fn get(self: *Self, key: Key) ?Value {
-            if (self.len() == 0) {
+            if (self.len == 0) {
                 return null;
             }
 
             const index = self.index_for_key(key);
-            if (self.buckets[index]) |kv| {
-                return kv.v;
+            if (self.keys.items()[index] != null) {
+                return self.values.items()[index];
             }
             return null;
         }
 
-        pub fn get_or_put(self: *Self, key: Key, initial_value: Value) Value {
-            const index = self.index_for_key(key);
-            if (self.buckets[index]) |*kv| {
-                return kv.v;
-            } else if (self.len() == self.cap()) {
-                self.* = self.expand();
-                return self.get_or_put(key, initial_value);
-            } else {
-                const index_node = self.indices.append(index);
-                self.buckets[index] = .{
-                    .k = key,
-                    .v = initial_value,
-                    .index_node = index_node,
-                };
+        pub fn get_or_put(self: *Self, key: Key, initial_value: Value, arena: *toolbox.Arena) Value {
+            if (self.cap == 0) {
+                self.expand(INITIAL_HASH_MAP_CAPACITY, arena);
+                const index = self.index_for_key(key);
+                self.keys.items()[index] = key;
+                self.values.items()[index] = initial_value;
+                self.len += 1;
                 return initial_value;
             }
+            var index = self.index_for_key(key);
+            if (self.keys.items()[index] == null) {
+                if (self.len == self.cap) {
+                    self.expand(self.cap * 2, arena);
+                    index = self.index_for_key(key);
+                }
+                self.keys.items()[index] = key;
+                self.values.items()[index] = initial_value;
+                self.len += 1;
+                return initial_value;
+            }
+            return self.values.items()[index];
         }
 
+        //Pointer may be invalid if expand, put, get_or_put, or get_or_put_ptr is called after this
+        //Use sparingly
         pub fn get_ptr(self: *Self, key: Key) ?*Value {
-            if (self.len() == 0) {
+            //Please do not try to merge get() and get_ptr().
+            //When you try to do that, you'll see why it doesn't make sense
+            if (self.len == 0) {
                 return null;
             }
 
-            const kvptr = &self.buckets[self.index_for_key(key)];
-            if (kvptr.*) |*kv| {
-                return &kv.v;
+            const index = self.index_for_key(key);
+            if (self.keys.items()[index] != null) {
+                return &self.values.items()[index];
             }
             return null;
         }
 
-        pub fn get_or_put_ptr(self: *Self, key: Key, initial_value: Value) *Value {
-            const index = self.index_for_key(key);
-            const kvptr = &self.buckets[index];
-            if (kvptr.*) |*kv| {
-                return &kv.v;
-            } else if (self.len() == self.cap()) {
-                self.* = self.expand();
-                return self.get_or_put_ptr(key, initial_value);
-            } else {
-                const index_node = self.indices.append(index);
-                kvptr.* = .{
-                    .k = key,
-                    .v = initial_value,
-                    .index_node = index_node,
-                };
-                return &kvptr.*.?.v;
+        //Pointer may be invalid if expand, put, get_or_put, or get_or_put_ptr is called after this
+        //Use sparingly
+        pub fn get_or_put_ptr(self: *Self, key: Key, initial_value: Value, arena: *toolbox.Arena) *Value {
+            if (self.cap == 0) {
+                self.expand(INITIAL_HASH_MAP_CAPACITY, arena);
+                const index = self.index_for_key(key);
+                self.keys.items()[index] = key;
+                const value_ptr = &self.values.items()[index];
+                value_ptr.* = initial_value;
+                self.len += 1;
+                return value_ptr;
             }
+            var index = self.index_for_key(key);
+            var value_ptr = &self.values.items()[index];
+            if (self.keys.items()[index] == null) {
+                if (self.len == self.cap) {
+                    self.expand(self.cap * 2, arena);
+                    index = self.index_for_key(key);
+                    value_ptr = &self.values.items()[index];
+                }
+                self.keys.items()[index] = key;
+                value_ptr.* = initial_value;
+                self.len += 1;
+            }
+            return value_ptr;
         }
 
         pub fn remove(self: *Self, key: Key) void {
+            if (self.len == 0) {
+                return;
+            }
+
             const key_bytes = if (comptime toolbox.is_string_type(Key))
                 to_bytes(key)
             else
                 to_bytes(&key);
             const h = hash_fnv1a64(key_bytes);
 
-            var index: usize = @intCast(h & (self.buckets.len - 1));
-            var kvptr = &self.buckets[index];
+            var index: usize = @intCast(h & (self.keys.len - 1));
+            var key_ptr = &self.keys.items()[index];
             var did_delete = false;
-            if (kvptr.*) |kv| {
-                if (eql(kv.k, key)) {
-                    self.indices.remove(kv.index_node);
-                    kvptr.* = null;
+            if (key_ptr.*) |bucket_key| {
+                if (eql(key, bucket_key)) {
+                    key_ptr.* = null;
                     did_delete = true;
                 }
             } else {
                 return;
             }
+            self.len -= 1;
 
-            const dest = kvptr;
+            const dest = index;
+
+            //now move collisions "up"
+
             //re-probe
             {
-                const index_bit_size: u6 = @intCast(@ctz(self.buckets.len));
+                const index_bit_size: u6 = @intCast(@ctz(self.keys.len));
                 var i = index_bit_size;
                 while (i < @bitSizeOf(usize)) : (i += index_bit_size) {
-                    index = @intCast((h >> i) & (self.buckets.len - 1));
-                    kvptr = &self.buckets[index];
-                    if (kvptr.*) |kv| {
+                    index = @intCast((h >> i) & (self.keys.len - 1));
+                    key_ptr = &self.keys.items()[index];
+                    if (key_ptr.*) |bucket_key| {
                         if (did_delete) {
-                            dest.* = kv;
-                            kvptr.* = null;
-                        } else if (eql(kv.k, key)) {
-                            self.indices.remove(kv.index_node);
-                            kvptr.* = null;
+                            self.keys.items()[dest] = bucket_key;
+                            self.values.items()[dest] = self.values.items()[index];
+                            key_ptr.* = null;
+                        } else if (eql(bucket_key, key)) {
+                            key_ptr.* = null;
                             did_delete = true;
                         }
                     } else {
@@ -220,15 +189,15 @@ fn BaseHashMap(comptime Key: type, comptime Value: type, comptime is_pointer_sta
             {
                 const end = index;
                 index += 1;
-                while (index != end) : (index = (index + 1) & (self.buckets.len - 1)) {
-                    kvptr = &self.buckets[index];
-                    if (kvptr.*) |kv| {
+                while (index != end) : (index = (index + 1) & (self.keys.len - 1)) {
+                    key_ptr = &self.keys.items()[index];
+                    if (key_ptr.*) |bucket_key| {
                         if (did_delete) {
-                            dest.* = kv;
-                            kvptr.* = null;
-                        } else if (eql(kv.k, key)) {
-                            self.indices.remove(kv.index_node);
-                            kvptr.* = null;
+                            self.keys.items()[dest] = bucket_key;
+                            self.values.items()[dest] = self.values.items()[index];
+                            key_ptr.* = null;
+                        } else if (eql(bucket_key, key)) {
+                            key.* = null;
                             did_delete = true;
                         }
                     } else {
@@ -238,10 +207,54 @@ fn BaseHashMap(comptime Key: type, comptime Value: type, comptime is_pointer_sta
             }
             toolbox.panic("Should not get here!", .{});
         }
+        pub inline fn clear(self: *Self) void {
+            self.len = 0;
+            for (self.keys) |*key| key.* = null;
+        }
+
+        pub fn clone(self: *const Self, arena: *toolbox.Arena) Self {
+            const k = self.keys.clone(arena);
+            const v = self.values.clone(arena);
+            return .{
+                .keys = k,
+                .values = v,
+                .len = self.len,
+            };
+        }
+        pub fn expand(self: *Self, new_capacity: usize, arena: *toolbox.Arena) void {
+            const _cap = @max(new_capacity, INITIAL_HASH_MAP_CAPACITY);
+            const new_num_buckets =
+                toolbox.next_power_of_2(@as(usize, @intFromFloat(@as(f64, @floatFromInt(_cap)) * 1.5)));
+
+            var keys = toolbox.DynamicArray(?Key){};
+            keys.expand(new_num_buckets, arena);
+            keys.len = keys.cap;
+            @memset(keys.items(), null);
+
+            var values = toolbox.DynamicArray(Value){};
+            values.expand(new_num_buckets, arena);
+            values.len = values.cap;
+
+            if (self.len > 0) {
+                var tmp_map = Self{
+                    .keys = keys,
+                    .values = values,
+                };
+                for (self.keys.items(), self.values.items()) |key_opt, value| {
+                    if (key_opt) |key| {
+                        const index = tmp_map.index_for_key(key);
+                        tmp_map.keys.items()[index] = key;
+                        tmp_map.values.items()[index] = value;
+                    }
+                }
+            }
+            self.keys = keys;
+            self.values = values;
+            self.cap = _cap;
+        }
 
         pub fn iterator(self: *const Self) Iterator {
             return .{
-                .it = self.indices.iterator(),
                 .hash_map = self,
             };
         }
@@ -253,10 +266,10 @@ fn BaseHashMap(comptime Key: type, comptime Value: type, comptime is_pointer_sta
                 to_bytes(&key);
             const h = hash_fnv1a64(key_bytes);
 
-            var index: usize = @intCast(h & (self.buckets.len - 1));
-            var kvptr = &self.buckets[index];
-            if (kvptr.*) |kv| {
-                if (eql(kv.k, key)) {
+            var index: usize = @intCast(h & (self.keys.len - 1));
+            var key_ptr = &self.keys.items()[index];
+            if (key_ptr.*) |bucket_key| {
+                if (eql(bucket_key, key)) {
                     return index;
                 }
             } else {
@@ -266,14 +279,14 @@ fn BaseHashMap(comptime Key: type, comptime Value: type, comptime is_pointer_sta
             self.index_collisions += 1;
             //re-probe
             {
-                const index_bit_size = @ctz(self.buckets.len);
+                const index_bit_size = @ctz(self.keys.len);
                 var i: usize = index_bit_size;
                 while (i < @bitSizeOf(usize)) : (i += index_bit_size) {
                     self.reprobe_collisions += 1;
-                    index = @intCast((h >> @intCast(i)) & (self.buckets.len - 1));
-                    kvptr = &self.buckets[index];
-                    if (kvptr.*) |kv| {
-                        if (eql(kv.k, key)) {
+                    index = @intCast((h >> @intCast(i)) & (self.keys.len - 1));
+                    key_ptr = &self.keys.items()[index];
+                    if (key_ptr.*) |bucket_key| {
+                        if (eql(bucket_key, key)) {
                             return index;
                         }
                     } else {
@@ -286,11 +299,11 @@ fn BaseHashMap(comptime Key: type, comptime Value: type, comptime is_pointer_sta
             {
                 const end = index;
                 index += 1;
-                while (index != end) : (index = (index + 1) & (self.buckets.len - 1)) {
+                while (index != end) : (index = (index + 1) & (self.keys.len - 1)) {
                     self.bad_reprobe_collisions += 1;
-                    kvptr = &self.buckets[index];
-                    if (kvptr.*) |kv| {
-                        if (eql(kv.k, key)) {
+                    key_ptr = &self.keys.items()[index];
+                    if (key_ptr.*) |bucket_key| {
+                        if (eql(bucket_key, key)) {
                             return index;
                         }
                     } else {
