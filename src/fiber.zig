@@ -3,14 +3,12 @@ const builtin = @import("builtin");
 
 //TODO: rename init/go/yied to fiinit/figo/fiyield
 
-const MAX_FIBER_ARGUMENTS = 2;
-
 const Registers = if (toolbox.IS_M_SERIES_MAC)
     extern struct {
         x19_to_x30: [12]u64 align(8),
         d8_to_d15: [8]u64 align(8),
         sp: u64 align(8),
-        arguments: [MAX_FIBER_ARGUMENTS]u64 align(8),
+        arg: *anyopaque align(8),
     }
 else if (toolbox.IS_PLAYDATE_HARDWARE)
     //Playdate
@@ -19,7 +17,43 @@ else if (toolbox.IS_PLAYDATE_HARDWARE)
         d8_to_d15: [8]u64 align(8),
         lr: u32 align(4),
         sp: u32 align(4),
-        arguments: [MAX_FIBER_ARGUMENTS]u32 align(4),
+        arg: *anyopaque align(4),
+    }
+else if (toolbox.IS_SYS_V_AMD64)
+    extern struct {
+        rbx: u64 align(8),
+        r12: u64 align(8),
+        r13: u64 align(8),
+        r14: u64 align(8),
+        r15: u64 align(8),
+        rsp: u64 align(8),
+        mxcsr: u64 align(8),
+        fcw: u64 align(8),
+        //NOTE rbp saved on stack
+        arg: *anyopaque align(8),
+    }
+else if (toolbox.IS_WIN_AMD64)
+    extern struct {
+        rbx: u64 align(8),
+        rdi: u64 align(8),
+        rsi: u64 align(8),
+        r12: u64 align(8),
+        r13: u64 align(8),
+        r14: u64 align(8),
+        r15: u64 align(8),
+        rsp: u64 align(8),
+        xmm6: u128 align(8),
+        xmm7: u128 align(8),
+        xmm8: u128 align(8),
+        xmm9: u128 align(8),
+        xmm10: u128 align(8),
+        xmm11: u128 align(8),
+        xmm12: u128 align(8),
+        xmm13: u128 align(8),
+        xmm14: u128 align(8),
+        xmm15: u128 align(8),
+        //NOTE rbp saved on stack
+        arg: *anyopaque align(8),
     }
 else
     @compileError("Fibers unsupported on this platform!");
@@ -62,71 +96,39 @@ pub fn init(arena: *toolbox.Arena, num_fibers: usize, stack_size: usize) void {
         };
     }
 }
-pub fn go(f: anytype, args: anytype) void {
-    comptime var ti = @typeInfo(@TypeOf(f));
-    switch (ti) {
-        .Pointer => |ptr_info| {
-            ti = @typeInfo(ptr_info.child);
-            switch (ti) {
-                .Fn => |fn_info| {
-                    if (fn_info.params.len != args.len) {
-                        @compileError("Function arguments are unexpected length");
-                    }
-                    inline for (fn_info.params, args) |param, arg| {
-                        const ArgType = @TypeOf(arg);
-                        if (param.type != ArgType) {
-                            @compileError("Type mismatch in fiber argument. Got: " ++
-                                @typeName(ArgType) ++ " but expected: " ++
-                                @typeName(param.type.?));
-                        }
-                    }
-                },
-                else => {
-                    @compileError("f must be a pointer to a function");
-                },
-            }
-        },
-        else => {
-            @compileError("f must be a pointer to a function");
-        },
-    }
-    if (args.len > MAX_FIBER_ARGUMENTS) {
-        @compileError("More than " ++ MAX_FIBER_ARGUMENTS ++ " arguments not supported");
-    }
 
+pub fn go(f: anytype, args: anytype, arena: *toolbox.Arena) void {
+    const Args = @TypeOf(args);
+    const args_ptr = arena.push(Args);
+    args_ptr.* = args;
+    const FiberEntry = struct {
+        fn fiber_entry(arg: *Args) callconv(.C) void {
+            //TODO support return values
+            _ = @call(.auto, f, arg.*);
+        }
+    };
     if (comptime toolbox.IS_M_SERIES_MAC) {
-        go_macos(f, args);
+        go_macos(&FiberEntry.fiber_entry, args_ptr);
     } else if (comptime toolbox.IS_PLAYDATE_HARDWARE) {
-        go_playdate(f, args);
+        go_playdate(&FiberEntry.fiber_entry, args_ptr);
+    } else if (comptime toolbox.IS_SYS_V_AMD64) {
+        go_sys_v_amd64(&FiberEntry.fiber_entry, args_ptr);
     } else {
         @compileError("Fibers unsupported on this platform!");
     }
+    g_state.num_fibers_active += 1;
 }
 
-inline fn go_macos(f: anytype, args: anytype) void {
+inline fn go_macos(fiber_entry: anytype, args: anytype) void {
     for (g_state.pool[MAIN_FIBER + 1 ..]) |*fiber| {
         if (fiber.state == .Unused) {
             const stack: []usize = @as([*]usize, @ptrCast(@alignCast(fiber.stack.ptr)))[0 .. fiber.stack.len / @sizeOf(usize)];
             stack[stack.len - 2] = @frameAddress();
-            stack[stack.len - 1] = @intFromPtr(f);
+            stack[stack.len - 1] = @intFromPtr(fiber_entry);
             fiber.registers.x19_to_x30[10] = @frameAddress();
             fiber.registers.x19_to_x30[11] = @intFromPtr(&ret);
             fiber.registers.sp = @intFromPtr(fiber.stack.ptr + fiber.stack.len - @sizeOf(usize) * 2);
-            inline for (args, 0..) |arg, i| {
-                const ti = @typeInfo(@TypeOf(arg));
-                switch (ti) {
-                    .Pointer => {
-                        fiber.registers.arguments[i] = @intFromPtr(arg);
-                    },
-                    .Int => {
-                        fiber.registers.arguments[i] = @intCast(arg);
-                    },
-                    .ComptimeInt => {
-                        fiber.registers.arguments[i] = @as(usize, arg);
-                    },
-                    else => @compileError("Unsupported fiber argument type"),
-                }
-            }
+            fiber.registers.arg = args;
             fiber.state = .Ready;
             return;
         }
@@ -136,34 +138,38 @@ inline fn go_macos(f: anytype, args: anytype) void {
 inline fn go_playdate(f: anytype, args: anytype) void {
     for (g_state.pool[MAIN_FIBER + 1 ..]) |*fiber| {
         if (fiber.state == .Unused) {
-            toolbox.println("in go_playdate", .{});
             const stack: []usize = @as([*]usize, @ptrCast(@alignCast(fiber.stack.ptr)))[0 .. fiber.stack.len / @sizeOf(usize)];
             stack[stack.len - 2] = @frameAddress();
             stack[stack.len - 1] = @intFromPtr(f);
             fiber.registers.r4_to_r11[3] = @frameAddress();
             fiber.registers.lr = @intFromPtr(&ret);
             fiber.registers.sp = @intFromPtr(fiber.stack.ptr + fiber.stack.len - @sizeOf(usize) * 2);
-            inline for (args, 0..) |arg, i| {
-                const ti = @typeInfo(@TypeOf(arg));
-                switch (ti) {
-                    .Pointer => {
-                        fiber.registers.arguments[i] = @intFromPtr(arg);
-                    },
-                    .Int => {
-                        fiber.registers.arguments[i] = @intCast(arg);
-                    },
-                    .ComptimeInt => {
-                        fiber.registers.arguments[i] = @as(usize, arg);
-                    },
-                    else => @compileError("Unsupported fiber argument type"),
-                }
-            }
+            fiber.registers.arg = args;
             fiber.state = .Ready;
             return;
         }
     }
     toolbox.panic("Max number of fibers exceeded!", .{});
 }
+
+inline fn go_sys_v_amd64(f: anytype, args: anytype) void {
+    for (g_state.pool[MAIN_FIBER + 1 ..]) |*fiber| {
+        if (fiber.state == .Unused) {
+            const stack: []usize = @as([*]usize, @ptrCast(@alignCast(fiber.stack.ptr)))[0 .. fiber.stack.len / @sizeOf(usize)];
+            stack[stack.len - 3] = @frameAddress();
+            stack[stack.len - 2] = @intFromPtr(f);
+            stack[stack.len - 1] = @intFromPtr(&ret);
+            fiber.registers.rsp = @intFromPtr(fiber.stack.ptr + fiber.stack.len - @sizeOf(usize) * 3);
+            fiber.registers.mxcsr = 0x1F80; //reset value of mxcsr
+            fiber.registers.fcw = 0x37F; //reset value of fcw
+            fiber.registers.arg = args;
+            fiber.state = .Ready;
+            return;
+        }
+    }
+    toolbox.panic("Max number of fibers exceeded!", .{});
+}
+
 pub fn yield() void {
     const old = current_fiber();
     if (old.state == .Running) {
@@ -177,7 +183,6 @@ pub fn yield() void {
             g_state.current = i;
             const new = current_fiber();
             new.state = .Running;
-            g_state.num_fibers_active += 1;
             switch_fibers(&new.registers, &old.registers);
             return;
         }
@@ -196,8 +201,10 @@ pub fn ret() void {
         const r = current_fiber();
         r.state = .Unused;
         g_state.num_fibers_active -= 1;
-        _ = yield();
+        yield();
     }
+    //TODO: maybe we should do something a little less harsh here...
+    toolbox.panic("Return called on main fiber!", .{});
 }
 
 pub fn number_of_fibers_active() usize {
@@ -254,7 +261,7 @@ comptime {
             \\   add sp, sp, #0x10
             \\
             \\;load arguments 
-            \\   ldp x0, x1, [x0, #0xA8]
+            \\   ldr x0, [x0, #0xA8]
             \\
             \\   ret x4
         );
@@ -278,8 +285,43 @@ comptime {
             \\
             \\#load arguments
             \\  add r2, r0, #4
-            \\  ldmia r2!, {r0, r1}
+            \\  ldmia r2!, {r0}
             \\  pop {fp, pc}
+        );
+    } else if (toolbox.IS_SYS_V_AMD64) {
+        asm (
+            \\switch_fibers:
+            \\# save old state registers
+            \\mov %rbx, 0x0(%rsi)
+            \\mov %r12, 0x8(%rsi)
+            \\mov %r13, 0x10(%rsi)
+            \\mov %r14, 0x18(%rsi)
+            \\mov %r15, 0x20(%rsi)
+            \\push %rbp #save frame address
+            \\mov %rsp, 0x28(%rsi)
+            \\stmxcsr 0x30(%rsi)
+            \\fnstcw 0x38(%rsi)
+            \\
+            \\# load new state registers
+            \\mov 0x0(%rdi), %rbx
+            \\mov 0x8(%rdi), %r12
+            \\mov 0x10(%rdi), %r13
+            \\mov 0x18(%rdi), %r14
+            \\mov 0x20(%rdi), %r15
+            \\mov 0x28(%rdi), %rsp
+            \\ldmxcsr 0x30(%rdi)
+            \\fldcw 0x38(%rdi)
+            \\
+            \\#load arguments
+            \\mov 0x40(%rdi), %rdi
+            \\
+            \\pop %rbp
+            \\retq
+        );
+    } else if (toolbox.IS_WIN_AMD64) {
+        asm (
+            \\#TODO
+            \\ud2
         );
     } else {
         @compileError("Fibers not yet supported!");

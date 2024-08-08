@@ -6,6 +6,7 @@ pub const TicketLock = struct {
     pub fn lock(self: *TicketLock) void {
         const ticket = @atomicRmw(u64, &self.taken, .Add, 1, .seq_cst);
         while (true) {
+            //TODO os_sync_wait_on_address
             if (@cmpxchgWeak(
                 u64,
                 &self.serving,

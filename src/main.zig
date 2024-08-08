@@ -567,11 +567,22 @@ fn run_tests() !void {
     }
     //fibers
     {
+        const FiberTestFn = struct {
+            fn fiber_test(til: *usize) void {
+                for (1..til.*) |i| {
+                    toolbox.println("Fiber output {}", .{i});
+                    _ = fiber.yield();
+                }
+            }
+        };
         defer arena.reset();
+        var til: usize = 10;
         fiber.init(arena, 4, toolbox.kb(64));
-        fiber.go(&fiber_test, .{});
-        fiber.go(&fiber_test, .{});
-        while (fiber.number_of_fibers_active() > 1) {}
+        fiber.go(FiberTestFn.fiber_test, .{&til}, arena);
+        fiber.go(FiberTestFn.fiber_test, .{&til}, arena);
+        while (fiber.number_of_fibers_active() > 1) {
+            fiber.yield();
+        }
     }
     //struct formatter
     {
@@ -681,12 +692,6 @@ fn profiler_fn2(n: isize) void {
             \\nop
             \\nop
         );
-    }
-}
-fn fiber_test() void {
-    for (1..10) |i| {
-        toolbox.println("{}", .{i});
-        _ = fiber.yield();
     }
 }
 fn concurrent_queue_enqueue_test_loop(

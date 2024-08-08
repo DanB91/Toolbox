@@ -33,11 +33,11 @@ pub fn build(b: *std.Build) void {
     //clean step
     {
         const clean_step = b.step("clean", "Clean all artifacts");
-        const rm_zig_cache = b.addRemoveDirTree("zig-cache");
+        const rm_zig_cache = b.addRemoveDirTree(b.path("zig-cache"));
         clean_step.dependOn(&rm_zig_cache.step);
-        const rm_dot_zig_cache = b.addRemoveDirTree(".zig-cache");
+        const rm_dot_zig_cache = b.addRemoveDirTree(b.path(".zig-cache"));
         clean_step.dependOn(&rm_dot_zig_cache.step);
-        const rm_zig_out = b.addRemoveDirTree("zig-out");
+        const rm_zig_out = b.addRemoveDirTree(b.path("zig-out"));
         clean_step.dependOn(&rm_zig_out.step);
     }
 }

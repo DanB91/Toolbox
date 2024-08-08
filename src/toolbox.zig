@@ -39,7 +39,8 @@ pub const Platform = enum {
 
 //These define the hardware we are on.  Used for hardware specific quirks
 pub const IS_M_SERIES_MAC = builtin.os.tag == .macos and builtin.cpu.arch.isAARCH64();
-pub const IS_PC = builtin.cpu.arch == .x86_64;
+pub const IS_SYS_V_AMD64 = builtin.cpu.arch == .x86_64 and !(builtin.os.tag == .windows or builtin.os.tag == .uefi);
+pub const IS_WIN_AMD64 = builtin.cpu.arch == .x86_64 and (builtin.os.tag == .windows or builtin.os.tag == .uefi);
 pub const IS_PLAYDATE_HARDWARE = builtin.os.tag == .freestanding and builtin.cpu.arch.isThumb();
 
 pub const THIS_PLATFORM = if (@hasDecl(root, "THIS_PLATFORM"))

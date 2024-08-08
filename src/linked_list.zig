@@ -52,6 +52,7 @@ pub fn llprepend(
     if (list.head == null) {
         list.tail = node;
     }
+    node.next = list.head;
     list.head = node;
 
     list.len += 1;
@@ -120,7 +121,7 @@ pub fn RandomRemovalLinkedList(comptime T: type) type {
         pub inline fn prepend_value(self: *Self, value: T, arena: *toolbox.Arena, free_list: *FreeList) *T {
             return llprepend_value(self, value, arena, free_list);
         }
-        pub inline fn remove(self: *Self, node: *T, free_list: *FreeList) void {
+        pub inline fn remove(self: *Self, node: *T, free_list: ?*FreeList) void {
             llremove(self, node, free_list);
         }
         pub fn clear(self: *Self) void {
@@ -148,6 +149,8 @@ fn llalloc_node(comptime T: type, arena: *toolbox.Arena, free_list: anytype) *T 
     return arena.push(T);
 }
 fn llfree_node(node: anytype, free_list: anytype) void {
-    node.next = free_list.*;
-    free_list.* = node;
+    if (free_list) |fl| {
+        node.next = fl.*;
+        fl.* = node;
+    }
 }
