@@ -45,7 +45,10 @@ pub const TimedBlock = struct {
     parent_section_index: usize = 0,
 };
 
-pub var g_state: State = .{};
+threadlocal var g_state: State = .{};
+
+//needed for BoksOS in case profiler is used before TLS is initialized
+var g_is_running: bool = false;
 
 pub fn start_profiler() void {
     if (comptime !ENABLE_PROFILER) {
@@ -53,16 +56,17 @@ pub fn start_profiler() void {
     }
     g_state = .{};
     g_state.is_running = true;
+    g_is_running = true;
     g_state.start = toolbox.now();
 }
 
 pub fn begin(comptime label: []const u8) void {
-    if ((comptime !ENABLE_PROFILER) or !g_state.is_running) {
+    if ((comptime !ENABLE_PROFILER) or !g_is_running or !g_state.is_running) {
         return;
     }
     const StaticVars = struct {
         //index 0 is always unused, since it is the "root parent"
-        var section_index: usize = 0;
+        threadlocal var section_index: usize = 0;
         comptime {
             const hack_to_get_unique_address_that_will_probably_break_in_the_future =
                 label;
@@ -101,7 +105,7 @@ pub fn begin(comptime label: []const u8) void {
 }
 
 pub fn end() void {
-    if ((comptime !ENABLE_PROFILER) or !g_state.is_running) {
+    if ((comptime !ENABLE_PROFILER) or !g_is_running or !g_state.is_running) {
         return;
     }
     const end_time = toolbox.now();
@@ -127,7 +131,7 @@ pub fn end() void {
 }
 
 pub fn end_profiler() void {
-    if (comptime !ENABLE_PROFILER) {
+    if ((comptime !ENABLE_PROFILER) or !g_is_running) {
         return;
     }
     g_state.end = toolbox.now();

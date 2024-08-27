@@ -31,6 +31,7 @@ pub fn llappend(
     }
     node.prev = list.tail;
     list.tail = node;
+    node.next = null;
 
     list.len += 1;
 }
@@ -54,6 +55,7 @@ pub fn llprepend(
     }
     node.next = list.head;
     list.head = node;
+    node.prev = null;
 
     list.len += 1;
 }
@@ -63,6 +65,9 @@ pub fn llremove(
     node: anytype,
     free_list: anytype,
 ) void {
+    if (list.len == 0) {
+        return;
+    }
     defer {
         list.len -= 1;
         llfree_node(node, free_list);
@@ -88,10 +93,12 @@ pub fn llremove(
         }
         return;
     }
-    var next = node.next.?;
-    var prev = node.prev.?;
-    prev.next = next;
-    next.prev = prev;
+    if (node.prev) |prev| {
+        prev.next = node.next;
+    }
+    if (node.next) |next| {
+        next.prev = node.prev;
+    }
 }
 
 pub fn RandomRemovalLinkedList(comptime T: type) type {

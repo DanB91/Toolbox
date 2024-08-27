@@ -26,6 +26,7 @@ pub fn HashMap(comptime Key: type, comptime Value: type) type {
             pub fn next(self: *Iterator) ?KeyValue {
                 while (self.cursor < self.hash_map.keys.len) : (self.cursor += 1) {
                     if (self.hash_map.keys.items()[self.cursor]) |key| {
+                        defer self.cursor += 1;
                         return .{
                             .k = key,
                             .v = self.hash_map.values.items()[self.cursor],

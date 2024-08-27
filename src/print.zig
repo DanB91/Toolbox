@@ -52,7 +52,8 @@ fn platform_print_to_console(comptime fmt: []const u8, args: anytype, comptime i
                 };
             toolbox.playdate_log_to_console("%s", to_print.ptr);
         },
-        .Wozmon64, .UEFI => {
+        .Wozmon64, .UEFI, .BoksOS => {
+            //TODO support BoksOS unified console
             var buffer = [_]u8{0} ** 2048;
             //TODO dynamically allocate buffer for printing.  use std.fmt.count to count the size
 
@@ -71,9 +72,7 @@ fn platform_print_to_console(comptime fmt: []const u8, args: anytype, comptime i
                 );
             }
         },
-        else => @compileError("Unsupported platform"),
     }
-    //TODO support BoksOS
     //TODO think about stderr
     //TODO won't work on windows
 }

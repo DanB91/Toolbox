@@ -14,7 +14,7 @@ else if (toolbox.IS_PLAYDATE_HARDWARE)
     //Playdate
     extern struct {
         r4_to_r11: [8]u32 align(4),
-        d8_to_d15: [8]u64 align(8),
+        d8_to_d15: [8]u64 align(4),
         lr: u32 align(4),
         sp: u32 align(4),
         arg: *anyopaque align(4),

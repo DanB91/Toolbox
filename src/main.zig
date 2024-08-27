@@ -283,6 +283,23 @@ fn run_tests() !void {
                 }
             }
         }
+
+        //removing nodes...
+        {
+            toolbox.expect(list.tail == third_element, "List tail is wrong", .{});
+            list.remove(third_element, &free_list);
+            toolbox.expect(list.len == 2, "List should be length 2", .{});
+            toolbox.expect(list.tail == first_element, "List tail is wrong", .{});
+            toolbox.expect(list.head == zeroth_element, "List head is wrong", .{});
+            list.remove(zeroth_element, &free_list);
+            toolbox.expect(list.tail == first_element, "List tail is wrong", .{});
+            toolbox.expect(list.head == first_element, "List head is wrong", .{});
+            toolbox.expect(list.len == 1, "List should be length 1", .{});
+            list.remove(first_element, &free_list);
+            toolbox.expect(list.len == 0, "List should be length 1", .{});
+            toolbox.expect(list.head == null, "List head should be null", .{});
+            toolbox.expect(list.tail == null, "List tail should be null", .{});
+        }
     }
 
     //Hash map
@@ -481,7 +498,7 @@ fn run_tests() !void {
             const i = @as(i64, @intCast(u));
             ring_queue.force_enqueue(i);
         }
-        var expected: i64 = 2;
+        var expected: i64 = 3;
         while (ring_queue.dequeue()) |got| {
             toolbox.expect(
                 expected == got,
@@ -493,7 +510,7 @@ fn run_tests() !void {
     }
     //MultiProducerMultiConsumerRingQueue multi thread test
     //TODO: remove for now
-    if (false) {
+    {
         defer arena.reset();
 
         const TestData = struct {
@@ -535,17 +552,6 @@ fn run_tests() !void {
         for (consumers) |c| {
             c.join();
         }
-        toolbox.expect(
-            ring_queue.used == 0,
-            "Expected no used ring queue entries.  Was: {}",
-            .{ring_queue.used},
-        );
-        toolbox.expect(
-            ring_queue.free == ring_queue.data.len,
-            "Expected all ring queue entries to be free.  Was: {}",
-            .{ring_queue.free},
-        );
-
         for (max_value_dequeued, 0..) |n, i| {
             toolbox.expect(
                 n == MAX_VALUE_DEQUEUED,
@@ -715,25 +721,30 @@ fn concurrent_queue_dequeue_test_loop(
 ) void {
     var last_actual = [_]i64{-1} ** num_producers;
 
-    while (@atomicLoad(isize, producers_running, .monotonic) > 0) {
+    var data_left = true;
+    while (@atomicLoad(isize, producers_running, .monotonic) > 0 or
+        data_left)
+    {
         if (ring_queue.dequeue()) |test_data| {
+            data_left = true;
             const thread_id: usize = test_data.thread_id;
             const actual = test_data.n;
 
             toolbox.expect(
                 actual > last_actual[thread_id],
                 \\Unexpected ring queue value.  Expected greater than: {}, Was: {}, Thread: {}
-                \\used: {}, free: {}, rcursor: {}, wcursor: {}, reserved_rcursor: {}, reserved_wcursor: {} 
+                \\ rcursor: {}, wcursor: {} 
             ,
                 .{
-                    last_actual[thread_id] & 0xFFFF_FFFF, actual & 0xFFFF_FFFF,        thread_id,
-                    ring_queue.used,                      ring_queue.free,             ring_queue.rcursor,
-                    ring_queue.wcursor,                   ring_queue.reserved_rcursor, ring_queue.reserved_wcursor,
+                    last_actual[thread_id] & 0xFFFF_FFFF, actual & 0xFFFF_FFFF, thread_id,
+                    ring_queue.rcursor,                   ring_queue.wcursor,
                 },
             );
             last_actual[thread_id] = actual;
             _ = @atomicRmw(i64, &max_value_dequeued[thread_id], .Max, actual, .acq_rel);
         } else {
+            data_left = false;
+
             std.atomic.spinLoopHint();
         }
     }
