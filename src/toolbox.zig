@@ -29,30 +29,42 @@ const print = @import("print.zig");
 
 pub const Platform = enum {
     MacOS,
-    //Linux, //TODO
+    Linux,
+    Windows,
     Playdate,
     BoksOS,
     Wozmon64,
-    UEFI,
     WASM,
+    UEFI,
 };
 
-//These define the hardware we are on.  Used for hardware specific quirks
-pub const IS_M_SERIES_MAC = builtin.os.tag == .macos and builtin.cpu.arch.isAARCH64();
-pub const IS_SYS_V_AMD64 = builtin.cpu.arch == .x86_64 and !(builtin.os.tag == .windows or builtin.os.tag == .uefi);
-pub const IS_WIN_AMD64 = builtin.cpu.arch == .x86_64 and (builtin.os.tag == .windows or builtin.os.tag == .uefi);
-pub const IS_PLAYDATE_HARDWARE = builtin.os.tag == .freestanding and builtin.cpu.arch.isThumb();
+pub const Hardware = enum {
+    AMD64,
+    ARM64,
+    Playdate,
+};
 
-pub const THIS_PLATFORM = if (@hasDecl(root, "THIS_PLATFORM"))
+pub const THIS_PLATFORM: Platform = if (@hasDecl(root, "THIS_PLATFORM"))
     root.THIS_PLATFORM
 else switch (builtin.os.tag) {
-    .macos => if (builtin.cpu.arch == .aarch64)
-        Platform.MacOS
-    else
-        @compileError("Intel macOS not supported!"),
-    .wasi => Platform.WASM,
-    else => @compileError("Please define the THIS_PLATFORM constant in the root source file"),
+    .macos => .MacOS,
+    .linux => .Linux,
+    .windows => .Windows,
+    .uefi => .UEFI,
+    .wasi => .WASM,
+    else => @compileError("Platform not yet supported"),
 };
+
+pub const THIS_HARDWARE: Hardware = switch (builtin.cpu.arch) {
+    .x86_64 => .AMD64,
+    .aarch64 => .ARM64,
+    .thumb => if (THIS_PLATFORM == .Playdate)
+        .Playdate
+    else
+        @compileError("Hardware not yet supported"),
+    else => @compileError("Hardware not yet supported"),
+};
+
 pub const IS_DEBUG = builtin.mode == .Debug;
 
 ////BoksOS runtime functions

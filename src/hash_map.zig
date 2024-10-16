@@ -142,9 +142,9 @@ pub fn HashMap(comptime Key: type, comptime Value: type) type {
             }
 
             const key_bytes = if (comptime toolbox.is_string_type(Key))
-                to_bytes(key)
+                toolbox.to_const_bytes(key)
             else
-                to_bytes(&key);
+                toolbox.to_const_bytes(&key);
             const h = hash_fnv1a64(key_bytes);
 
             var index: usize = @intCast(h & (self.keys.len - 1));
@@ -262,9 +262,9 @@ pub fn HashMap(comptime Key: type, comptime Value: type) type {
 
         fn index_for_key(self: *Self, key: Key) usize {
             const key_bytes = if (comptime toolbox.is_string_type(Key))
-                to_bytes(key)
+                toolbox.to_const_bytes(key)
             else
-                to_bytes(&key);
+                toolbox.to_const_bytes(&key);
             const h = hash_fnv1a64(key_bytes);
 
             var index: usize = @intCast(h & (self.keys.len - 1));
@@ -325,33 +325,6 @@ pub fn hash_fnv1a64(data: []const u8) u64 {
     return h;
 }
 
-fn to_bytes(v: anytype) []const u8 {
-    const T = @TypeOf(v);
-    if (comptime T == []const u8) {
-        return v;
-    }
-    if (comptime T == toolbox.String8) {
-        return v.bytes;
-    }
-    const ti = @typeInfo(T);
-    switch (comptime ti) {
-        .Pointer => |info| {
-            const Child = info.child;
-            switch (comptime info.size) {
-                .Slice => {
-                    return @as([*]const u8, @ptrCast(v.ptr))[0..@sizeOf(Child)];
-                },
-                else => {
-                    return @as([*]const u8, @ptrCast(v))[0..@sizeOf(Child)];
-                },
-            }
-        },
-        else => {
-            @compileError("Parameter must be a pointer!");
-        },
-    }
-}
-
 fn eql(a: anytype, b: @TypeOf(a)) bool {
     const T = @TypeOf(a);
     if (comptime T == toolbox.String8) {
@@ -359,20 +332,20 @@ fn eql(a: anytype, b: @TypeOf(a)) bool {
     }
 
     switch (comptime @typeInfo(T)) {
-        .Struct => |info| {
+        .@"struct" => |info| {
             inline for (info.fields) |field_info| {
                 if (!eql(@field(a, field_info.name), @field(b, field_info.name))) return false;
             }
             return true;
         },
-        .ErrorUnion => {
+        .error_union => {
             if (a) |a_p| {
                 if (b) |b_p| return eql(a_p, b_p) else |_| return false;
             } else |a_e| {
                 if (b) |_| return false else |b_e| return a_e == b_e;
             }
         },
-        //.Union => |info| {
+        //.@"union" => |info| {
         //if (info.tag_type) |UnionTag| {
         //const tag_a = activeTag(a);
         //const tag_b = activeTag(b);
@@ -388,27 +361,27 @@ fn eql(a: anytype, b: @TypeOf(a)) bool {
 
         //@compileError("cannot compare untagged union type " ++ @typeName(T));
         //},
-        .Array => {
+        .array => {
             if (a.len != b.len) return false;
             for (a, 0..) |e, i|
                 if (!eql(e, b[i])) return false;
             return true;
         },
-        .Vector => |info| {
+        .vector => |info| {
             var i: usize = 0;
             while (i < info.len) : (i += 1) {
                 if (!eql(a[i], b[i])) return false;
             }
             return true;
         },
-        .Pointer => |info| {
+        .pointer => |info| {
             return switch (info.size) {
                 .One, .Many, .C => a == b,
                 //changed from std.meta.eql
                 .Slice => std.mem.eql(info.child, a, b),
             };
         },
-        .Optional => {
+        .optional => {
             if (a == null and b == null) return true;
             if (a == null or b == null) return false;
             return eql(a.?, b.?);

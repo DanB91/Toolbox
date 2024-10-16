@@ -154,6 +154,13 @@ pub const StringBuilder = struct {
             toolbox.panic("Error std.fmt.bufPrint in str8fmt: {}", .{e});
         builder.bytes.append_slice(bytes, arena);
     }
+    pub inline fn append(
+        builder: *StringBuilder,
+        str: String8,
+        arena: *toolbox.Arena,
+    ) void {
+        builder.bytes.append_slice(str.bytes, arena);
+    }
 
     pub fn str8(builder: StringBuilder) toolbox.String8 {
         return toolbox.str8(builder.bytes.items());

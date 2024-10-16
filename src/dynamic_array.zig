@@ -67,19 +67,30 @@ pub fn DynamicArray(comptime T: type) type {
             return result;
         }
 
+        //This is not sufficient to call if you are reseting the arena
         pub inline fn clear(self: *Self) void {
             self.len = 0;
         }
 
         pub const sort = switch (@typeInfo(T)) {
-            .Int, .Float => sort_number,
-            .Struct => sort_struct,
+            .int, .float => sort_number,
+            .@"struct" => sort_struct,
+            .pointer => switch (@typeInfo(toolbox.ChildType(T))) {
+                .int, .float => sort_number,
+                .@"struct" => sort_struct,
+                else => @compileError("Unsupported type " ++ @typeName(T) ++ " for DynamicArray"),
+            },
             else => @compileError("Unsupported type " ++ @typeName(T) ++ " for DynamicArray"),
         };
 
         pub const sort_reverse = switch (@typeInfo(T)) {
-            .Int, .Float => sort_number_reverse,
-            .Struct => sort_struct_reverse,
+            .int, .float => sort_number_reverse,
+            .@"struct" => sort_struct_reverse,
+            .pointer => switch (@typeInfo(toolbox.ChildType(T))) {
+                .int, .float => sort_number_reverse,
+                .@"struct" => sort_struct_reverse,
+                else => @compileError("Unsupported type " ++ @typeName(T) ++ " for DynamicArray"),
+            },
             else => @compileError("Unsupported type " ++ @typeName(T) ++ " for DynamicArray"),
         };
         pub fn format(

@@ -4,7 +4,7 @@ const std = @import("std");
 
 comptime {
     switch (toolbox.THIS_PLATFORM) {
-        .MacOS, .Playdate => {},
+        .MacOS, .Playdate, .Linux => {},
         else => {
             if (builtin.target.cpu.arch != .x86_64) {
                 @compileError("We only support AMD64 if platform isn't macOS or Playdate");
@@ -24,13 +24,12 @@ pub const Duration = struct {
     ticks: Ticks = 0,
 
     pub const Ticks = switch (toolbox.THIS_PLATFORM) {
-        .MacOS => i64,
         .Playdate => f32,
         else => i64,
     };
 
     const PlatformDuration = switch (toolbox.THIS_PLATFORM) {
-        .MacOS => MacOSDuration,
+        .MacOS, .Linux => UnixDuration,
         .Playdate => PlaydateDuration,
         else => AMD64Duration,
     };
@@ -64,25 +63,46 @@ pub fn now() Duration {
     switch (comptime toolbox.THIS_PLATFORM) {
         .MacOS => {
             const ctime = @cImport(@cInclude("time.h"));
-            const nanos = ctime.clock_gettime_nsec_np(ctime.CLOCK_MONOTONIC);
+            const nanos = ctime.clock_gettime_nsec_np(ctime.CLOCK_MONOTONIC_RAW);
             toolbox.assert(nanos != 0, "nanotime call failed!", .{});
             return .{ .ticks = @intCast(nanos) };
+        },
+        .Linux => {
+            if (comptime toolbox.THIS_HARDWARE == .ARM64) {
+                const ctime = @cImport(@cInclude("time.h"));
+                var tp = ctime.struct_timespec{};
+                const result = ctime.clock_gettime(
+                    ctime.CLOCK_MONOTONIC_RAW,
+                    &tp,
+                );
+                toolbox.expecteq(0, result, "clock_gettime() call failed.");
+                const ticks = tp.tv_nsec;
+
+                return .{ .ticks = ticks };
+            } else {
+                const result = amd64_read_time();
+                return result;
+            }
         },
         .Playdate => {
             return .{ .ticks = toolbox.playdate_get_seconds() };
         },
         else => {
-            var top: u64 = 0;
-            var bottom: u64 = 0;
-            asm volatile (
-                \\rdtsc
-                : [top] "={edx}" (top),
-                  [bottom] "={eax}" (bottom),
-            );
-            const tsc = (top << 32) | bottom;
-            return .{ .ticks = @intCast(tsc) };
+            const result = amd64_read_time();
+            return result;
         },
     }
+}
+fn amd64_read_time() Duration {
+    var top: u64 = 0;
+    var bottom: u64 = 0;
+    asm volatile (
+        \\rdtsc
+        : [top] "={edx}" (top),
+          [bottom] "={eax}" (bottom),
+    );
+    const tsc = (top << 32) | bottom;
+    return .{ .ticks = @intCast(tsc) };
 }
 
 const AMD64Duration = struct {
@@ -105,7 +125,7 @@ const AMD64Duration = struct {
     }
 };
 
-const MacOSDuration = struct {
+const UnixDuration = struct {
     pub inline fn nanoseconds(self: Duration) Nanoseconds {
         return self.ticks;
     }

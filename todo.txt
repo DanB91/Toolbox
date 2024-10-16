@@ -1,9 +1,9 @@
 - [ ] Create small library that contains
     - Targets:
-       - [ ] BoksOS
-       - [ ] macOS
-       - [ ] Linux?
-       - [ ] Windows?
+       - [X] BoksOS
+       - [X] macOS
+       - [X] Linux
+       - [ ] Windows
     - [ ] Logging
         - [X] platform interface for logging a string
         - [X] sprintf to buffer using zig's std format functions
@@ -27,7 +27,7 @@
         - [ ] Large address-space-backed buckets
         - [ ] Pointer-stable hashmap
 
-    - [ ] Dynamic array
+    - [X] Dynamic array
     - [ ] Lots of benchmarking
     - [ ] Lots of tests
     - [ ] Thread-local context?

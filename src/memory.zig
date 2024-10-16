@@ -6,7 +6,7 @@ pub const z = std.mem.zeroes;
 
 pub const PAGE_SIZE = switch (toolbox.THIS_PLATFORM) {
     .MacOS => toolbox.kb(16),
-    .UEFI => toolbox.kb(4),
+    .Windows, .UEFI, .Linux => toolbox.kb(4),
     .Playdate => 4, //Playdate is embeded, so no concept of pages, but everything should be 4-byte aligned
     .BoksOS, .Wozmon64 => toolbox.mb(2),
     .WASM => toolbox.kb(64),
@@ -29,16 +29,9 @@ pub const Arena = struct {
         .free = zstd_free,
     };
 
-    pub fn init(comptime size: usize) *Arena {
-        comptime {
-            if (size < PAGE_SIZE) {
-                @compileError("Arena size must be at least the size of a page!");
-            }
-            if (!toolbox.is_power_of_2(size)) {
-                @compileError("Arena size must be a power of 2!");
-            }
-        }
-        const data = os_allocate_memory(size);
+    pub fn init(size: usize) *Arena {
+        const actual_size = toolbox.align_up(size, PAGE_SIZE);
+        const data = os_allocate_memory(actual_size);
         var tmp_arena = Arena{
             .data = data,
             .pos = 0,
@@ -89,8 +82,8 @@ pub const Arena = struct {
 
     pub fn restore(self: *Arena) void {
         toolbox.assert(self.current_save > 0, "Restored without save point", .{});
-        self.restore_save_point(self.save_points[self.current_save]);
         self.current_save -= 1;
+        self.restore_save_point(self.save_points[self.current_save]);
     }
 
     pub fn create_arena_from_arena(self: *Arena, comptime size: usize) *Arena {
@@ -261,7 +254,7 @@ pub const Arena = struct {
     }
 
     pub fn expand(arena: *Arena, ptr: anytype, new_size: usize) @TypeOf(ptr) {
-        const Child = @typeInfo(@TypeOf(ptr)).Pointer.child;
+        const Child = @typeInfo(@TypeOf(ptr)).pointer.child;
         toolbox.asserteq(
             arena.pos,
             @intFromPtr(arena.data.ptr) + (arena.data.len * @sizeOf(Child)) - @intFromPtr(ptr),
@@ -297,9 +290,12 @@ pub const Arena = struct {
     }
 };
 pub fn get_scratch_arena(conflict_arena_opt: ?*toolbox.Arena) *toolbox.Arena {
-    const SCRATCH_ARENA_SIZE = if (comptime !toolbox.IS_PLAYDATE_HARDWARE) toolbox.mb(4) else toolbox.kb(32);
+    const SCRATCH_ARENA_SIZE = if (comptime toolbox.THIS_HARDWARE != .Playdate)
+        toolbox.mb(16)
+    else
+        toolbox.kb(32);
 
-    const ThreadLocalVars = if (comptime !toolbox.IS_PLAYDATE_HARDWARE)
+    const ThreadLocalVars = if (comptime toolbox.THIS_HARDWARE != .Playdate)
         struct {
             threadlocal var scratch_arenas: [2]?*Arena = [_]?*Arena{null} ** 2;
         }
@@ -429,17 +425,17 @@ pub fn os_free_memory(memory: []u8) void {
 
 ///platform functions
 const platform_allocate_memory = switch (toolbox.THIS_PLATFORM) {
-    //.MacOS => unix_allocate_memory,
-    //.MacOS => posix_allocate_memory,
+    //.MacOSARM => unix_allocate_memory,
+    //.MacOSARM => posix_allocate_memory,
     .MacOS => macos_allocate_memory,
     .Playdate => playdate_allocate_memory,
     .BoksOS, .Wozmon64 => root.allocate_memory,
     .WASM => posix_allocate_memory,
+    .Linux => unix_allocate_memory,
     else => @compileError("OS not supported"),
 };
 const platform_free_memory = switch (toolbox.THIS_PLATFORM) {
-    //.MacOS => unix_free_memory,
-    //.MacOS => posix_free_memory,
+    .Linux => unix_free_memory,
     .MacOS => macos_free_memory,
     .Playdate => playdate_free_memory,
     .WASM => posix_free_memory,
@@ -448,7 +444,10 @@ const platform_free_memory = switch (toolbox.THIS_PLATFORM) {
 };
 
 ///Unix functions
-const mman = if (toolbox.THIS_PLATFORM == .MacOS) @cImport(@cInclude("sys/mman.h")) else null;
+const mman = switch (toolbox.THIS_PLATFORM) {
+    .LinuxARM, .LinuxAMD, .MacOSARM => @cImport(@cInclude("sys/mman.h")),
+    else => null,
+};
 fn unix_free_memory(memory: []u8) void {
     const code = mman.munmap(memory.ptr, memory.len);
     if (code != 0) {
@@ -458,7 +457,7 @@ fn unix_free_memory(memory: []u8) void {
 fn unix_allocate_memory(n: usize) []u8 {
     if (mman.mmap(null, n, mman.PROT_READ | mman.PROT_WRITE, mman.MAP_PRIVATE | mman.MAP_ANONYMOUS, -1, 0)) |ptr| {
         if (ptr != mman.MAP_FAILED) {
-            return @as([*]u8, ptr)[0..n];
+            return @as([*]u8, @ptrCast(ptr))[0..n];
         } else {
             toolbox.panic("Error allocating {} bytes of OS memory", .{n});
         }
@@ -492,8 +491,7 @@ fn macos_free_memory(memory: []u8) void {
 //posix functions
 extern fn calloc(count: usize, size: usize) ?*anyopaque;
 extern fn malloc(n: usize) ?*anyopaque;
-//extern fn free(ptr: ?*anyopaque) void;
-const c_free = @extern(fn (ptr: ?*anyopaque) void, .{ .name = "free" });
+const c_free = @extern(*const fn (ptr: ?*anyopaque) callconv(.C) void, .{ .name = "free" });
 fn posix_allocate_memory(n: usize) []u8 {
     //NOTE: despite what Apple says, calloc is terrible.  Don't use it
     //const data_opt = calloc(1, n);
@@ -504,7 +502,7 @@ fn posix_allocate_memory(n: usize) []u8 {
     toolbox.panic("Error allocating {} bytes of OS memory.", .{n});
 }
 fn posix_free_memory(memory: []u8) void {
-    c_free(memory.ptr);
+    c_free(@ptrCast(memory.ptr));
 }
 
 ////Playdate functions

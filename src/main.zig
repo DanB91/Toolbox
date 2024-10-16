@@ -3,7 +3,6 @@ const toolbox = @import("toolbox.zig");
 const profiler = toolbox.profiler;
 const fiber = toolbox.fiber;
 
-pub const THIS_PLATFORM = toolbox.Platform.MacOS;
 pub const ENABLE_PROFILER = true; // !toolbox.IS_DEBUG;
 pub const panic = toolbox.panic_handler;
 
@@ -471,6 +470,7 @@ fn run_tests() !void {
     //stack
     //TODO
     {}
+    //TODO: replace with channel
     //ring queue
     {
         defer arena.reset();
@@ -560,16 +560,52 @@ fn run_tests() !void {
             );
         }
     }
-    //dynamic array
+    //dynamic array number
     {
         var da = toolbox.DynamicArray(i64){};
-        da.append(1, arena);
-        da.append(2, arena);
         da.append(3, arena);
+        da.append(2, arena);
+        da.append(1, arena);
         da.append(4, arena);
         toolbox.assert(da.len == 4, "Unexpected dynamic array length: {}", .{da.len});
         toolbox.assert(da.cap == toolbox.DYNAMIC_ARRAY_INITIAL_CAPACITY, "Unexpected dynamic array capacity: {}", .{da.len});
         toolbox.println("Dynamic array print: {}", .{da});
+        for (da.items(), [_]i64{ 3, 2, 1, 4 }) |actual, expected| {
+            toolbox.expecteq(expected, actual, "Incorrect value from dynamic array");
+        }
+        da.sort();
+        for (da.items(), [_]i64{ 1, 2, 3, 4 }) |actual, expected| {
+            toolbox.expecteq(expected, actual, "Incorrect value from dynamic array");
+        }
+    }
+    //dynamic array pointer to struct
+    {
+        const TestStruct = struct {
+            num: i64,
+        };
+        var da = toolbox.DynamicArray(*TestStruct){};
+        var val = arena.push(TestStruct);
+        val.num = 3;
+        da.append(val, arena);
+        val = arena.push(TestStruct);
+        val.num = 2;
+        da.append(val, arena);
+        val = arena.push(TestStruct);
+        val.num = 1;
+        da.append(val, arena);
+        val = arena.push(TestStruct);
+        val.num = 4;
+        da.append(val, arena);
+        toolbox.assert(da.len == 4, "Unexpected dynamic array length: {}", .{da.len});
+        toolbox.assert(da.cap == toolbox.DYNAMIC_ARRAY_INITIAL_CAPACITY, "Unexpected dynamic array capacity: {}", .{da.len});
+        toolbox.println("Dynamic array print: {}", .{da});
+        for (da.items(), [_]i64{ 3, 2, 1, 4 }) |actual, expected| {
+            toolbox.expecteq(expected, actual.num, "Incorrect value from dynamic array");
+        }
+        da.sort("num");
+        for (da.items(), [_]i64{ 1, 2, 3, 4 }) |actual, expected| {
+            toolbox.expecteq(expected, actual.num, "Incorrect value from dynamic array");
+        }
     }
     //fibers
     {
@@ -577,7 +613,7 @@ fn run_tests() !void {
             fn fiber_test(til: *usize) void {
                 for (1..til.*) |i| {
                     toolbox.println("Fiber output {}", .{i});
-                    _ = fiber.yield();
+                    fiber.yield();
                 }
             }
         };

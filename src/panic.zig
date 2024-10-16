@@ -2,10 +2,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const toolbox = @import("toolbox.zig");
 
-pub const panic_handler = if (toolbox.THIS_PLATFORM != .Playdate)
-    std.builtin.default_panic
-else
-    playdate_panic;
+pub const panic_handler = switch (toolbox.THIS_PLATFORM) {
+    .Playdate => playdate_panic,
+    else => std.builtin.default_panic,
+};
 
 pub fn playdate_panic(
     msg: []const u8,
