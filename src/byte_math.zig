@@ -92,6 +92,11 @@ pub inline fn clamp(v: anytype, low: @TypeOf(v), high: @TypeOf(v)) @TypeOf(v) {
     return @max(low, @min(high, v));
 }
 
+pub inline fn in_range(v: anytype, start: @TypeOf(v), end: @TypeOf(v)) bool {
+    const result = v >= start and v < end;
+    return result;
+}
+
 pub inline fn bytes_to_pages(n: usize, comptime page_size: usize) usize {
     return (n / page_size) + @as(usize, if (n % page_size != 0) 1 else 0);
 }

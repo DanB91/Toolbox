@@ -41,6 +41,10 @@ pub const Duration = struct {
         return .{ .ticks = lhs.ticks - rhs.ticks };
     }
 
+    pub const from_nanoseconds = @field(PlatformDuration, "from_nanoseconds");
+    pub const from_microseconds = @field(PlatformDuration, "from_microseconds");
+    pub const from_milliseconds = @field(PlatformDuration, "from_milliseconds");
+    pub const from_seconds = @field(PlatformDuration, "from_seconds");
     pub const nanoseconds = @field(PlatformDuration, "nanoseconds");
     pub const microseconds = @field(PlatformDuration, "microseconds");
     pub const milliseconds = @field(PlatformDuration, "milliseconds");
@@ -106,6 +110,26 @@ fn amd64_read_time() Duration {
 }
 
 const AMD64Duration = struct {
+    pub inline fn from_nanoseconds(ns: Nanoseconds) Duration {
+        const result = from_microseconds(ns / 1000);
+        return result;
+    }
+    pub inline fn from_microseconds(mcs: Microseconds) Duration {
+        toolbox.assert(amd64_ticks_to_microseconds > 0, "TSC calibration was not performed", .{});
+        const result = Duration{
+            .ticks = mcs * amd64_ticks_to_microseconds,
+        };
+        return result;
+    }
+    pub inline fn from_milliseconds(ms: Milliseconds) Duration {
+        const result = from_microseconds(ms * 1000);
+        return result;
+    }
+    pub inline fn from_seconds(sec: Seconds) Duration {
+        const sec_int: Microseconds = @intFromFloat(sec);
+        const result = from_microseconds(sec_int * 1_000_000);
+        return result;
+    }
     pub inline fn nanoseconds(self: Duration) Nanoseconds {
         return self.microseconds() * 1000;
     }
@@ -126,6 +150,23 @@ const AMD64Duration = struct {
 };
 
 const UnixDuration = struct {
+    pub inline fn from_nanoseconds(ns: Nanoseconds) Duration {
+        const result = Duration{ .ticks = ns };
+        return result;
+    }
+    pub inline fn from_microseconds(mcs: Microseconds) Duration {
+        const result = from_nanoseconds(mcs * 1000);
+        return result;
+    }
+    pub inline fn from_milliseconds(ms: Milliseconds) Duration {
+        const result = from_nanoseconds(ms * 1_000_000);
+        return result;
+    }
+    pub inline fn from_seconds(sec: Seconds) Duration {
+        const sec_int: Nanoseconds = @intFromFloat(sec);
+        const result = from_nanoseconds(sec_int * 1_000_000_000);
+        return result;
+    }
     pub inline fn nanoseconds(self: Duration) Nanoseconds {
         return self.ticks;
     }
@@ -141,6 +182,25 @@ const UnixDuration = struct {
     }
 };
 const PlaydateDuration = struct {
+    pub inline fn from_nanoseconds(ns: Nanoseconds) Duration {
+        const ns_float: Seconds = @intFromFloat(ns);
+        const result = from_seconds(ns_float / 1_000_000_000);
+        return result;
+    }
+    pub inline fn from_microseconds(mcs: Microseconds) Duration {
+        const mcs_float: Seconds = @intFromFloat(mcs);
+        const result = from_seconds(mcs_float / 1_000_000);
+        return result;
+    }
+    pub inline fn from_milliseconds(ms: Milliseconds) Duration {
+        const ms_float: Seconds = @intFromFloat(ms);
+        const result = from_seconds(ms_float / 1000);
+        return result;
+    }
+    pub inline fn from_seconds(sec: Seconds) Duration {
+        const result = Duration{ .ticks = sec };
+        return result;
+    }
     pub inline fn nanoseconds(self: Duration) Nanoseconds {
         return @intFromFloat(self.ticks * 1_000_000_000.0);
     }

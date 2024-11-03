@@ -120,6 +120,14 @@ pub const Arena = struct {
     pub inline fn push_slice_clear_aligned(self: *Arena, comptime T: type, n: usize, comptime alignment: usize) []align(alignment) T {
         return self.push_multiple(T, n, true, alignment);
     }
+
+    ///allocates n+1 bytes, but returns n zero bytes
+    pub inline fn push_bytes_z(arena: *Arena, n: usize) [:0]u8 {
+        const bytes = push_bytes_unaligned(arena, n + 1);
+        @memset(bytes, 0);
+        const result: [:0]u8 = @ptrCast(bytes[0 .. bytes.len - 1]);
+        return result;
+    }
     pub fn push_bytes_unaligned(arena: *Arena, n: usize) []u8 {
         if (n == 0) {
             return toolbox.z([]u8);
@@ -318,6 +326,9 @@ pub fn get_scratch_arena(conflict_arena_opt: ?*toolbox.Arena) *toolbox.Arena {
                         ret.save();
                         return ret;
                     }
+                } else {
+                    arena.save();
+                    return arena;
                 }
             } else {
                 arena.save();

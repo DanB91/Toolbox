@@ -4,16 +4,20 @@ const toolbox = @import("toolbox.zig");
 
 pub const panic_handler = switch (toolbox.THIS_PLATFORM) {
     .Playdate => playdate_panic,
-    else => std.builtin.default_panic,
+    else => std.debug.FormattedPanic.call,
 };
 
 pub fn playdate_panic(
-    msg: []const u8,
+    _msg: []const u8,
     error_return_trace: ?*std.builtin.StackTrace,
     return_address: ?usize,
 ) noreturn {
     _ = error_return_trace;
     _ = return_address;
+
+    const panic_msg_arena = toolbox.Arena.init(toolbox.kb(512));
+    const panic_msg_z = std.fmt.allocPrintZ(panic_msg_arena.zstd_allocator, "{s}", .{_msg}) catch
+        "Uh well that sucks...";
 
     switch (comptime builtin.os.tag) {
         .freestanding => {
@@ -28,7 +32,7 @@ pub fn playdate_panic(
             //We need to know the load address and it doesn't seem to be exactly
             //0x6000_0000 as originally thought
 
-            toolbox.playdate_error("PANIC: %s", msg.ptr);
+            toolbox.playdate_error("PANIC: %s", panic_msg_z.ptr);
         },
         else => {
             //playdate simulator
@@ -63,7 +67,7 @@ pub fn playdate_panic(
             };
             toolbox.playdate_error(
                 "PANIC: %s\n\n%s",
-                msg.ptr,
+                panic_msg_z.ptr,
                 stack_trace_string.ptr,
             );
         },

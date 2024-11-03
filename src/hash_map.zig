@@ -165,6 +165,7 @@ pub fn HashMap(comptime Key: type, comptime Value: type) type {
             //now move collisions "up"
 
             //re-probe
+
             {
                 const index_bit_size: u6 = @intCast(@ctz(self.keys.len));
                 var i = index_bit_size;
@@ -173,6 +174,12 @@ pub fn HashMap(comptime Key: type, comptime Value: type) type {
                     key_ptr = &self.keys.items()[index];
                     if (key_ptr.*) |bucket_key| {
                         if (did_delete) {
+                            //NOTE: This checks to see if there is a chain
+                            if (self.index_for_key(bucket_key) == index) {
+                                return;
+                            }
+                            //TODO: Goddammit, this isn't gonna work if there is a chain of
+                            //      entries.  Only works for a chain of 2 entries
                             self.keys.items()[dest] = bucket_key;
                             self.values.items()[dest] = self.values.items()[index];
                             key_ptr.* = null;
@@ -268,7 +275,9 @@ pub fn HashMap(comptime Key: type, comptime Value: type) type {
             const h = hash_fnv1a64(key_bytes);
 
             var index: usize = @intCast(h & (self.keys.len - 1));
+
             var key_ptr = &self.keys.items()[index];
+
             if (key_ptr.*) |bucket_key| {
                 if (eql(bucket_key, key)) {
                     return index;
@@ -280,12 +289,13 @@ pub fn HashMap(comptime Key: type, comptime Value: type) type {
             self.index_collisions += 1;
             //re-probe
             {
-                const index_bit_size = @ctz(self.keys.len);
-                var i: usize = index_bit_size;
+                const index_bit_size: u6 = @intCast(@ctz(self.keys.len));
+                var i = index_bit_size;
                 while (i < @bitSizeOf(usize)) : (i += index_bit_size) {
                     self.reprobe_collisions += 1;
-                    index = @intCast((h >> @intCast(i)) & (self.keys.len - 1));
+                    index = @intCast((h >> i) & (self.keys.len - 1));
                     key_ptr = &self.keys.items()[index];
+
                     if (key_ptr.*) |bucket_key| {
                         if (eql(bucket_key, key)) {
                             return index;

@@ -1,34 +1,35 @@
-- [ ] Create small library that contains
-    - Targets:
-       - [X] BoksOS
-       - [X] macOS
-       - [X] Linux
-       - [ ] Windows
-    - [ ] Logging
-        - [X] platform interface for logging a string
-        - [X] sprintf to buffer using zig's std format functions
-            - [ ] use dynamic allocation using an arena
-        - [X] panic
-    - [X] Assertions
-    - [ ] Type Utils
-        - [X] Test Iterable
-        - [X] Test Single Pointer
-        - ????
-    - [X] Time
-    - [X] Arena allocator
-    - [X] Buffer-Backed Linked Lists
-    - [ ] UTF8 functions
-        - [X] String8 struct
-        - [X] Rune Iterator
-        - [X] Substring
-        - [ ] String interning
-    - [ ] Hash map
-        - [X] Fixed bucket hashmap
-        - [ ] Large address-space-backed buckets
-        - [ ] Pointer-stable hashmap
+- [ ] Channel from BoksOS
+- Targets:
+    - [X] BoksOS
+    - [X] macOS
+    - [X] Linux
+    - [X] Windows
 
-    - [X] Dynamic array
-    - [ ] Lots of benchmarking
-    - [ ] Lots of tests
-    - [ ] Thread-local context?
+- [ ] Logging
+    - [X] platform interface for logging a string
+    - [X] sprintf to buffer using zig's std format functions
+        - [ ] use dynamic allocation using an arena
+    - [X] panic
+- [X] Assertions
+- [X] Type Utils
+    - [X] Test Iterable
+    - [X] Test Single Pointer
+    - ????
+- [X] Time
+- [X] Arena allocator
+- [X] Buffer-Backed Linked Lists
+- [ ] UTF8 functions
+    - [X] String8 struct
+    - [X] Rune Iterator
+    - [X] Substring
+    - [ ] String interning
+- [ ] Hash map
+    - [X] Fixed bucket hashmap
+    - [ ] Large address-space-backed buckets
+    - [ ] Pointer-stable hashmap
+
+- [X] Dynamic array
+- [ ] Lots of benchmarking
+- [ ] Lots of tests
+- [ ] Thread-local context?
 

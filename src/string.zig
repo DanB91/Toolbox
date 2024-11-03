@@ -6,57 +6,54 @@ pub fn str8lit(comptime bytes: [:0]const u8) String8 {
     return comptime str8(bytes);
 }
 pub fn str8fmt(comptime fmt: []const u8, args: anytype, arena: *toolbox.Arena) String8 {
-    const buffer_len = @as(usize, @intCast(std.fmt.count(fmt, args)));
+    const buffer_len = @as(usize, @intCast(std.fmt.count(fmt, args))) + 1;
     const buffer = arena.push_bytes_unaligned(buffer_len);
-    const string_bytes = std.fmt.bufPrint(buffer, fmt, args) catch |e|
+    const string_bytes = std.fmt.bufPrintZ(buffer, fmt, args) catch |e|
         toolbox.panic("Error std.fmt.bufPrint in str8fmt: {}", .{e});
     return str8(string_bytes);
 }
 pub fn str8fmtbuf(buffer: []u8, comptime fmt: []const u8, args: anytype) String8 {
-    const string_bytes = std.fmt.bufPrint(buffer, fmt, args) catch |e|
+    const string_bytes = std.fmt.bufPrintZ(buffer, fmt, args) catch |e|
         toolbox.panic("Error std.fmt.bufPrint in str8fmt: {}", .{e});
     return str8(string_bytes);
 }
-pub fn str8(bytes: []const u8) String8 {
-    var it = utf8le_rune_iterator(bytes);
-    var rune_length: usize = 0;
-    while (it.next()) |ral| {
-        if (ral.rune == 0) {
-            break;
-        }
-        rune_length += 1;
-    }
+pub fn str8(bytes: [:0]const u8) String8 {
     return String8{
         .bytes = bytes,
-        .rune_length = rune_length,
     };
 }
 //NOTE: only little endian supported for now
 pub const String8 = struct {
-    bytes: []const u8 = @as([*]const u8, undefined)[0..0],
-    rune_length: usize = 0,
+    bytes: [:0]const u8 = "",
 
     pub fn init(bytes: []const u8) String8 {
-        var it = utf8le_rune_iterator(bytes);
-        var rune_length: usize = 0;
-        while (it.next()) |ral| {
-            if (ral.rune == 0) {
-                break;
-            }
-            rune_length += 1;
-        }
         return String8{
             .bytes = bytes,
             .rune_length = rune_length,
         };
     }
 
-    pub fn substring(self: *const String8, rune_start: usize, rune_end_opt: ?usize) String8 {
-        if (rune_start >= self.rune_length) {
-            return .{
-                .bytes = @as([*]const u8, undefined)[0..0],
-                .rune_length = 0,
-            };
+    pub fn rune_length(self: *const String8) usize {
+        var it = utf8le_rune_iterator(self.bytes);
+        var result: usize = 0;
+        while (it.next()) |ral| {
+            if (ral.rune == 0) {
+                break;
+            }
+            result += 1;
+        }
+        return result;
+    }
+
+    pub fn substring(
+        self: *const String8,
+        rune_start: usize,
+        rune_end_opt: ?usize,
+        arena: *toolbox.Arena,
+    ) String8 {
+        const rlen = self.rune_length();
+        if (rune_start >= rlen) {
+            return .{};
         }
         var it = utf8le_rune_iterator(self.bytes);
         var i: usize = 0;
@@ -67,7 +64,6 @@ pub const String8 = struct {
                 if (rune_end_opt == null) {
                     return .{
                         .bytes = self.bytes[start_byte..],
-                        .rune_length = self.rune_length - rune_start,
                     };
                 } else {
                     break;
@@ -86,9 +82,14 @@ pub const String8 = struct {
                 i += 1;
                 end_byte += rune_and_len.len;
             }
+            const substring_copy = arena.push_bytes_z(end_byte - start_byte);
+            @memcpy(
+                substring_copy,
+                self.bytes[start_byte..end_byte],
+            );
+
             return .{
-                .bytes = self.bytes[start_byte..end_byte],
-                .rune_length = rune_end - rune_start,
+                .bytes = substring_copy,
             };
         }
         toolbox.panic("Should not be here!", .{});
@@ -121,6 +122,13 @@ pub const String8 = struct {
         }
         return false;
     }
+    pub fn copy(src: *const String8, arena: *toolbox.Arena) String8 {
+        const dest = arena.push_bytes_z(src.bytes.len);
+        @memcpy(dest, src.bytes);
+        return .{
+            .bytes = dest,
+        };
+    }
 
     pub fn equals(s1: *const String8, s2: String8) bool {
         const a = s1.bytes;
@@ -148,9 +156,9 @@ pub const StringBuilder = struct {
         args: anytype,
         arena: *toolbox.Arena,
     ) void {
-        const buffer_len = @as(usize, @intCast(std.fmt.count(fmt, args)));
+        const buffer_len = @as(usize, @intCast(std.fmt.count(fmt, args))) + 1;
         const buffer = arena.push_bytes_unaligned(buffer_len);
-        const bytes = std.fmt.bufPrint(buffer, fmt, args) catch |e|
+        const bytes = std.fmt.bufPrintZ(buffer, fmt, args) catch |e|
             toolbox.panic("Error std.fmt.bufPrint in str8fmt: {}", .{e});
         builder.bytes.append_slice(bytes, arena);
     }
@@ -162,8 +170,10 @@ pub const StringBuilder = struct {
         builder.bytes.append_slice(str.bytes, arena);
     }
 
-    pub fn str8(builder: StringBuilder) toolbox.String8 {
-        return toolbox.str8(builder.bytes.items());
+    pub fn str8(builder: StringBuilder, arena: *toolbox.Arena) toolbox.String8 {
+        const buf = arena.push_bytes_z(builder.bytes.len);
+        @memcpy(buf, builder.bytes.items());
+        return toolbox.str8(buf);
     }
 };
 
