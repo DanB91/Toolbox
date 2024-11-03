@@ -12,7 +12,6 @@ pub fn HashMap(comptime Key: type, comptime Value: type) type {
         hash_collisions: usize = 0,
         index_collisions: usize = 0,
         reprobe_collisions: usize = 0,
-        bad_reprobe_collisions: usize = 0,
 
         pub const KeyValue = struct {
             k: Key,
@@ -141,13 +140,8 @@ pub fn HashMap(comptime Key: type, comptime Value: type) type {
                 return;
             }
 
-            const key_bytes = if (comptime toolbox.is_string_type(Key))
-                toolbox.to_const_bytes(key)
-            else
-                toolbox.to_const_bytes(&key);
-            const h = hash_fnv1a64(key_bytes);
+            var index = self.hash_index(key);
 
-            var index: usize = @intCast(h & (self.keys.len - 1));
             var key_ptr = &self.keys.items()[index];
             var did_delete = false;
             if (key_ptr.*) |bucket_key| {
@@ -160,52 +154,30 @@ pub fn HashMap(comptime Key: type, comptime Value: type) type {
             }
             self.len -= 1;
 
-            const dest = index;
+            var dest = index;
 
             //now move collisions "up"
 
             //re-probe
 
             {
-                const index_bit_size: u6 = @intCast(@ctz(self.keys.len));
-                var i = index_bit_size;
-                while (i < @bitSizeOf(usize)) : (i += index_bit_size) {
-                    index = @intCast((h >> i) & (self.keys.len - 1));
-                    key_ptr = &self.keys.items()[index];
-                    if (key_ptr.*) |bucket_key| {
-                        if (did_delete) {
-                            //NOTE: This checks to see if there is a chain
-                            if (self.index_for_key(bucket_key) == index) {
-                                return;
-                            }
-                            //TODO: Goddammit, this isn't gonna work if there is a chain of
-                            //      entries.  Only works for a chain of 2 entries
-                            self.keys.items()[dest] = bucket_key;
-                            self.values.items()[dest] = self.values.items()[index];
-                            key_ptr.* = null;
-                        } else if (eql(bucket_key, key)) {
-                            key_ptr.* = null;
-                            did_delete = true;
-                        }
-                    } else {
-                        return;
-                    }
-                }
-            }
-
-            //last ditch effort
-            {
                 const end = index;
-                index += 1;
+                index = (index + 1) & (self.keys.len - 1);
                 while (index != end) : (index = (index + 1) & (self.keys.len - 1)) {
                     key_ptr = &self.keys.items()[index];
                     if (key_ptr.*) |bucket_key| {
                         if (did_delete) {
+                            const bucket_index = self.hash_index(bucket_key);
+                            if (bucket_index == index) {
+                                return;
+                            }
                             self.keys.items()[dest] = bucket_key;
                             self.values.items()[dest] = self.values.items()[index];
                             key_ptr.* = null;
+                            //TODO: new addition. check if this makes sense
+                            dest = index;
                         } else if (eql(bucket_key, key)) {
-                            key.* = null;
+                            key_ptr.* = null;
                             did_delete = true;
                         }
                     } else {
@@ -266,15 +238,19 @@ pub fn HashMap(comptime Key: type, comptime Value: type) type {
                 .hash_map = self,
             };
         }
-
-        fn index_for_key(self: *Self, key: Key) usize {
+        fn hash_index(self: *Self, key: Key) usize {
             const key_bytes = if (comptime toolbox.is_string_type(Key))
                 toolbox.to_const_bytes(key)
             else
                 toolbox.to_const_bytes(&key);
             const h = hash_fnv1a64(key_bytes);
 
-            var index: usize = @intCast(h & (self.keys.len - 1));
+            const result: usize = @intCast(h & (self.keys.len - 1));
+            return result;
+        }
+
+        fn index_for_key(self: *Self, key: Key) usize {
+            var index = self.hash_index(key);
 
             var key_ptr = &self.keys.items()[index];
 
@@ -289,29 +265,10 @@ pub fn HashMap(comptime Key: type, comptime Value: type) type {
             self.index_collisions += 1;
             //re-probe
             {
-                const index_bit_size: u6 = @intCast(@ctz(self.keys.len));
-                var i = index_bit_size;
-                while (i < @bitSizeOf(usize)) : (i += index_bit_size) {
-                    self.reprobe_collisions += 1;
-                    index = @intCast((h >> i) & (self.keys.len - 1));
-                    key_ptr = &self.keys.items()[index];
-
-                    if (key_ptr.*) |bucket_key| {
-                        if (eql(bucket_key, key)) {
-                            return index;
-                        }
-                    } else {
-                        return index;
-                    }
-                }
-            }
-
-            //last ditch effort
-            {
                 const end = index;
-                index += 1;
+                index = (index + 1) & (self.keys.len - 1);
                 while (index != end) : (index = (index + 1) & (self.keys.len - 1)) {
-                    self.bad_reprobe_collisions += 1;
+                    self.reprobe_collisions += 1;
                     key_ptr = &self.keys.items()[index];
                     if (key_ptr.*) |bucket_key| {
                         if (eql(bucket_key, key)) {
