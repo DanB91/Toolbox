@@ -9,7 +9,7 @@ pub const PAGE_SIZE = switch (toolbox.THIS_PLATFORM) {
     .Windows, .UEFI, .Linux => toolbox.kb(4),
     .Playdate => 4, //Playdate is embeded, so no concept of pages, but everything should be 4-byte aligned
     .BoksOS, .Wozmon64 => toolbox.mb(2),
-    .WASM => toolbox.kb(64),
+    .Emscripten => toolbox.kb(64),
 };
 pub const Arena = struct {
     data: []u8,
@@ -441,7 +441,7 @@ const platform_allocate_memory = switch (toolbox.THIS_PLATFORM) {
     .MacOS => macos_allocate_memory,
     .Playdate => playdate_allocate_memory,
     .BoksOS, .Wozmon64 => root.allocate_memory,
-    .WASM => posix_allocate_memory,
+    .Emscripten => posix_allocate_memory,
     .Linux => unix_allocate_memory,
     else => @compileError("OS not supported"),
 };
@@ -449,14 +449,14 @@ const platform_free_memory = switch (toolbox.THIS_PLATFORM) {
     .Linux => unix_free_memory,
     .MacOS => macos_free_memory,
     .Playdate => playdate_free_memory,
-    .WASM => posix_free_memory,
+    .Emscripten => posix_free_memory,
     .BoksOS, .Wozmon64 => root.free_memory,
     else => @compileError("OS not supported"),
 };
 
 ///Unix functions
 const mman = switch (toolbox.THIS_PLATFORM) {
-    .LinuxARM, .LinuxAMD, .MacOSARM => @cImport(@cInclude("sys/mman.h")),
+    .Linux, .MacOS => @cImport(@cInclude("sys/mman.h")),
     else => null,
 };
 fn unix_free_memory(memory: []u8) void {
@@ -500,13 +500,15 @@ fn macos_free_memory(memory: []u8) void {
 }
 
 //posix functions
-extern fn calloc(count: usize, size: usize) ?*anyopaque;
-extern fn malloc(n: usize) ?*anyopaque;
 const c_free = @extern(*const fn (ptr: ?*anyopaque) callconv(.C) void, .{ .name = "free" });
 fn posix_allocate_memory(n: usize) []u8 {
-    //NOTE: despite what Apple says, calloc is terrible.  Don't use it
-    //const data_opt = calloc(1, n);
-    const data_opt = malloc(n);
+    const C = struct {
+        extern fn aligned_alloc(alignment: usize, size: usize) ?*anyopaque;
+    };
+    //NOTE: despite what Apple says, calloc is terrible on macOS.  Don't use it on macOS
+    // const data_opt = calloc(1, n);
+    // const data_opt = malloc(n);
+    const data_opt = C.aligned_alloc(toolbox.PAGE_SIZE, n);
     if (data_opt) |data| {
         return @as([*]u8, @ptrCast(data))[0..n];
     }

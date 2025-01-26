@@ -1,3 +1,5 @@
+- [ ] Min and Max stats do not work with recursive functions
+    - Maybe remove?
 - [ ] Channel from BoksOS
 - Targets:
     - [X] BoksOS

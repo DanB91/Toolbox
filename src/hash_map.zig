@@ -343,9 +343,9 @@ fn eql(a: anytype, b: @TypeOf(a)) bool {
         },
         .pointer => |info| {
             return switch (info.size) {
-                .One, .Many, .C => a == b,
+                .one, .many, .c => a == b,
                 //changed from std.meta.eql
-                .Slice => std.mem.eql(info.child, a, b),
+                .slice => std.mem.eql(info.child, a, b),
             };
         },
         .optional => {

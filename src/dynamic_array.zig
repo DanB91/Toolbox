@@ -3,8 +3,12 @@ const toolbox = @import("toolbox.zig");
 
 pub const DYNAMIC_ARRAY_INITIAL_CAPACITY = 32;
 pub fn DynamicArray(comptime T: type) type {
+    const Result = DynamicArrayAligned(T, @alignOf(T));
+    return Result;
+}
+pub fn DynamicArrayAligned(comptime T: type, comptime alignment: usize) type {
     return struct {
-        ptr: [*]T = undefined,
+        ptr: [*]align(alignment) T = undefined,
         len: usize = 0,
         cap: usize = 0,
 
@@ -12,7 +16,7 @@ pub fn DynamicArray(comptime T: type) type {
 
         const Self = @This();
 
-        pub inline fn items(self: *const Self) []T {
+        pub inline fn items(self: *const Self) []align(alignment) T {
             return self.ptr[0..self.len];
         }
 
@@ -27,7 +31,7 @@ pub fn DynamicArray(comptime T: type) type {
             self.ptr[self.len] = value;
             self.len += 1;
         }
-        pub fn append_slice(self: *Self, slice: []T, arena: *toolbox.Arena) void {
+        pub fn append_slice(self: *Self, slice: []const T, arena: *toolbox.Arena) void {
             const expected_cap = slice.len + self.len;
             if (self.cap < expected_cap) {
                 self.expand(@max(
@@ -48,7 +52,11 @@ pub fn DynamicArray(comptime T: type) type {
             //     const ptr_to_test = arena.data[arena.pos - current_cap * @sizeOf(u8)..].ptr;
             //     if (ptr_to_test == da.ptr) {}
             // }
-            const new_buffer = arena.push_slice(T, new_capacity);
+            const new_buffer = arena.push_slice_aligned(
+                T,
+                new_capacity,
+                alignment,
+            );
             @memcpy(new_buffer[0..self.len], self.ptr[0..self.len]);
             self.cap = new_capacity;
             self.ptr = new_buffer.ptr;

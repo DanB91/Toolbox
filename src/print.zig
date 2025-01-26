@@ -26,50 +26,48 @@ pub fn panic(comptime fmt: []const u8, args: anytype) noreturn {
 
 fn platform_print_to_console(comptime fmt: []const u8, args: anytype, comptime is_err: bool, comptime include_newline: bool) void {
     const nl = if (include_newline) "\n" else "";
+
+    const eff_fmt = if (is_err)
+        "ERROR: " ++ fmt ++ nl
+    else
+        fmt ++ nl;
+
+    const arena = toolbox.get_scratch_arena(null);
+    defer arena.restore();
+
+    const count: usize = @intCast(std.fmt.count(eff_fmt, args) + 1); //plus 1 for null byte
+
+    const buffer = arena.push_slice_clear(u8, count);
+
+    const to_print =
+        std.fmt.bufPrintZ(buffer, eff_fmt, args) catch unreachable;
+
     switch (comptime toolbox.THIS_PLATFORM) {
-        .WASM, .MacOS, .Linux => {
-            var buffer = [_]u8{0} ** 2048;
-            //TODO dynamically allocate buffer for printing.  use std.fmt.count to count the size
+        .Emscripten, .MacOS, .Linux => {
 
-            const to_print = if (is_err)
-                std.fmt.bufPrint(&buffer, "ERROR: " ++ fmt ++ nl, args) catch return
-            else
-                std.fmt.bufPrint(&buffer, fmt ++ nl, args) catch return;
-
+            //-1 for removing null byte
             _ = write(if (is_err) 2 else 1, to_print.ptr, to_print.len);
         },
         .Playdate => {
-            var buffer = [_]u8{0} ** 128;
-            const to_print = if (is_err)
-                std.fmt.bufPrintZ(&buffer, "ERROR: " ++ fmt, args) catch {
-                    toolbox.playdate_log_to_console("String too long to print");
-                    return;
-                }
-            else
-                std.fmt.bufPrintZ(&buffer, fmt, args) catch {
-                    toolbox.playdate_log_to_console("String too long to print");
-                    return;
-                };
             toolbox.playdate_log_to_console("%s", to_print.ptr);
         },
         .Wozmon64, .UEFI, .BoksOS => {
-            //TODO support BoksOS unified console
-            var buffer = [_]u8{0} ** 2048;
-            //TODO dynamically allocate buffer for printing.  use std.fmt.count to count the size
-
-            const to_print = if (is_err)
-                std.fmt.bufPrint(&buffer, "ERROR: " ++ fmt ++ nl, args) catch return
-            else
-                std.fmt.bufPrint(&buffer, fmt ++ nl, args) catch return;
-            const COM1_PORT_ADDRESS = 0x3F8;
-            for (to_print) |b| {
-                asm volatile (
-                    \\outb %%al, %%dx
-                    :
-                    : [data] "{al}" (b),
-                      [port] "{dx}" (COM1_PORT_ADDRESS),
-                    : "rax", "rdx"
-                );
+            switch (toolbox.THIS_HARDWARE) {
+                .AMD64 => {
+                    const COM1_PORT_ADDRESS = 0x3F8;
+                    for (to_print) |b| {
+                        asm volatile (
+                            \\outb %%al, %%dx
+                            :
+                            : [data] "{al}" (b),
+                              [port] "{dx}" (COM1_PORT_ADDRESS),
+                            : "rax", "rdx"
+                        );
+                    }
+                },
+                else => {
+                    //TODO
+                },
             }
         },
         else => @compileError("TODO"),

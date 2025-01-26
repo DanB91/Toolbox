@@ -34,13 +34,14 @@ pub const Platform = enum {
     Playdate,
     BoksOS,
     Wozmon64,
-    WASM,
+    Emscripten,
     UEFI,
 };
 
 pub const Hardware = enum {
     AMD64,
     ARM64,
+    WASM32,
     Playdate,
 };
 
@@ -51,13 +52,14 @@ else switch (builtin.os.tag) {
     .linux => .Linux,
     .windows => .Windows,
     .uefi => .UEFI,
-    .wasi => .WASM,
+    .emscripten => .Emscripten,
     else => @compileError("Platform not yet supported"),
 };
 
 pub const THIS_HARDWARE: Hardware = switch (builtin.cpu.arch) {
     .x86_64 => .AMD64,
     .aarch64 => .ARM64,
+    .wasm32 => .WASM32,
     .thumb => if (THIS_PLATFORM == .Playdate)
         .Playdate
     else
