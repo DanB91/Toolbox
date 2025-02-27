@@ -16,70 +16,43 @@ pub const make_ring_queue = if (toolbox.THIS_PLATFORM == .MacOS)
 else
     make_not_magic_ring_queue;
 
-pub const free_ring_queue = if (toolbox.THIS_PLATFORM == .MacOS)
-    free_magic_ring_queue
-else
-    free_not_magic_ring_queue;
-
 pub fn make_not_magic_ring_queue(comptime T: type, at_least_n: usize, arena: *toolbox.Arena) NotMagicRingQueue(T) {
-    const data = arena.push_slice(T, at_least_n);
+    const n_pow_of_2 = toolbox.next_power_of_2(at_least_n);
+    const data = arena.push_slice(T, n_pow_of_2);
     const result = NotMagicRingQueue(T){ .data = data };
     return result;
 }
 
-pub fn free_not_magic_ring_queue(q: anytype) void {
-    //TODO: do nothing
-    _ = q;
-}
-
-pub fn make_magic_ring_queue(comptime T: type, at_least_n: usize, _: *toolbox.Arena) MagicRingQueue(T) {
-    const byte_buffer = make_magic_ring_byte_buffer(at_least_n * @sizeOf(T), @alignOf(T));
-    const data = @as([*]T, @ptrCast(byte_buffer.ptr))[0 .. byte_buffer.len / @sizeOf(T)];
-    const result = MagicRingQueue(T){ .data = data };
-    return result;
-}
-
-pub fn free_magic_ring_queue(q: anytype) void {
-    const unit_size = @sizeOf(toolbox.ChildType(@TypeOf(q.data)));
-    const data = @as([*]u8, @ptrCast(q.data.ptr))[0 .. unit_size * q.data.len];
-    free_magic_ring_byte_buffer(data);
-}
-
-pub fn make_magic_ring_byte_buffer(desired_size: usize, comptime alignment: usize) []align(alignment) u8 {
+pub fn make_magic_ring_queue(comptime T: type, at_least_n: usize, arena: *toolbox.Arena) MagicRingQueue(T) {
+    const n_pow_of_2 = toolbox.next_power_of_2(at_least_n);
     const page_size: usize = @intCast(c.getpagesize());
-    const num_pages = (desired_size / page_size) + @as(usize, if (desired_size % page_size != 0) 1 else 0);
-    const n = num_pages * page_size;
+    var lcm = (page_size * n_pow_of_2) / std.math.gcd(page_size, n_pow_of_2);
+    lcm = (lcm * @sizeOf(T)) / std.math.gcd(@sizeOf(T), lcm);
 
-    var result_address: u64 = 0;
+    const n_bytes = lcm;
+    const n = lcm / @sizeOf(T);
 
+    toolbox.expect(toolbox.is_power_of_2(n), "n was not a power of 2 as expected, but was: {}", .{n});
+
+    const backing_store_bytes = arena.push_bytes_aligned_runtime(n_bytes, page_size);
+    const backing_store = @as([*]T, @ptrCast(@alignCast(backing_store_bytes.ptr)))[0..n];
+
+    var magic_ring_buffer_address_start: u64 = 0;
+    const src_address = @intFromPtr(backing_store.ptr);
+
+    const page_mask = page_size - 1;
+    var protection: c.vm_prot_t = c.VM_PROT_READ | c.VM_PROT_WRITE;
     var kern_error: c.kern_return_t = 0;
     const self = c.mach_task_self();
-    kern_error = c.mach_vm_allocate(
-        self,
-        &result_address,
-        n * 2,
-        c.VM_FLAGS_ANYWHERE,
-    );
-    toolbox.expect(
-        kern_error == c.KERN_SUCCESS,
-        "Initial allocation for magic ring buffer memory failed! Error: {}",
-        .{kern_error},
-    );
 
-    var protection: c.vm_prot_t = c.VM_PROT_READ | c.VM_PROT_WRITE;
-    var magic_ring_buffer_address_start = result_address + n;
-
-    //TODO: can control alignment this way. Set low bits will be 0 in the resulting address
-    const page_mask = alignment - 1;
-    const flags = c.VM_FLAGS_FIXED | c.VM_FLAGS_OVERWRITE;
     kern_error = c.mach_vm_remap(
         self,
         &magic_ring_buffer_address_start,
-        n,
+        n_bytes,
         page_mask,
-        flags,
+        c.VM_FLAGS_ANYWHERE,
         self,
-        result_address,
+        src_address,
         0,
         &protection,
         &protection,
@@ -90,23 +63,32 @@ pub fn make_magic_ring_byte_buffer(desired_size: usize, comptime alignment: usiz
         "Magic ring buffer memory mapping failed! Error code: {}",
         .{kern_error},
     );
-    const result = @as([*]align(alignment) u8, @ptrFromInt(result_address))[0 .. n * 2];
-    return result;
-}
 
-pub fn free_magic_ring_byte_buffer(magic_ring_buffer: []u8) void {
-    const self = c.mach_task_self();
-    const addr = @intFromPtr(magic_ring_buffer.ptr);
-    const kern_error = c.mach_vm_deallocate(
+    var ring_buffer_second_half = magic_ring_buffer_address_start + n_bytes;
+    kern_error = c.mach_vm_remap(
         self,
-        addr,
-        magic_ring_buffer.len,
+        &ring_buffer_second_half,
+        n_bytes,
+        page_mask,
+        c.VM_FLAGS_FIXED | c.VM_FLAGS_OVERWRITE,
+        self,
+        src_address,
+        0,
+        &protection,
+        &protection,
+        c.VM_INHERIT_NONE,
     );
     toolbox.expect(
         kern_error == c.KERN_SUCCESS,
-        "Freeing magic ring buffer failed! Error code: {}",
+        "Magic ring buffer memory mapping failed! Error code: {}",
         .{kern_error},
     );
+
+    const ring_buffer = @as([*]T, @ptrFromInt(magic_ring_buffer_address_start))[0 .. n * 2];
+    const result = MagicRingQueue(T){
+        .data = ring_buffer,
+    };
+    return result;
 }
 
 pub fn MagicRingQueue(T: type) type {
@@ -114,54 +96,89 @@ pub fn MagicRingQueue(T: type) type {
         data: []T = toolbox.z([]T),
         rcursor: usize = 0,
         wcursor: usize = 0,
-        _len: usize = 0,
+        //TODO:
+        // lock: std.Thread.Mutex = .{},
+        _len: usize = 0, // for debugger purposes only
 
         const Self = @This();
-
         pub fn enqueue(self: *Self, in: []const T) void {
-            if (self.cap() - self._len < in.len) {
-                toolbox.panic(
-                    "Queue is full. Capacity: {}. Tried to enqueue: {}",
-                    .{ self.cap(), in.len },
-                );
-            }
-            const buffer = self.enqueue_buffer(in.len);
-            @memcpy(buffer, in);
-            self.update_enqueued(in.len);
+            toolbox.expect(self.unoccupied() >= in.len, "Queue full!", .{});
+            const buf = self.enqueue_buffer();
+            const n = @min(buf.len, in.len);
+            @memcpy(buf[0..n], in[0..n]);
+            self.update_enqueued(n);
         }
         pub fn dequeue(self: *Self, out: []T) []T {
-            const result = self.peek(out);
-            self.update_dequeued(result.len);
-            return result;
-        }
-        pub fn peek(self: *Self, out: []T) []T {
-            const n = @min(out.len, self._len);
+            var buf = self.dequeue_buffer();
+            const n = @min(buf.len, out.len);
             const result = out[0..n];
-            const peek_buffer = self.dequeue_buffer(n);
-            @memcpy(result, peek_buffer);
+            @memcpy(result, buf[0..n]);
+            if (comptime toolbox.IS_DEBUG) {
+                @memset(buf[0..n], undefined);
+            }
+            self.update_dequeued(n);
             return result;
         }
-        pub inline fn enqueue_buffer(self: *Self, n: usize) []T {
+        pub fn enqueue_one(self: *Self, value: T) void {
+            var store = [1]T{value};
+            self.enqueue(&store);
+        }
+
+        pub fn dequeue_one(self: *Self) ?T {
+            var store = [1]T{undefined};
+            const slice = self.dequeue(&store);
+            if (slice.len > 0) {
+                return slice[0];
+            } else {
+                return null;
+            }
+        }
+
+        pub fn peek(self: *Self, out: []T) []T {
+            var buf = self.dequeue_buffer();
+            const n = @min(buf.len, out.len);
+            const result = out[0..n];
+            @memcpy(result, buf[0..n]);
+            return result;
+        }
+
+        pub inline fn enqueue_buffer(self: *Self) []T {
+            const n = self.unoccupied();
             const result = self.data[self.wcursor .. self.wcursor + n];
             return result;
         }
-        pub inline fn dequeue_buffer(self: *Self, n: usize) []T {
+        pub inline fn dequeue_buffer(self: *Self) []T {
+            const n = self.len();
             const result = self.data[self.rcursor .. self.rcursor + n];
             return result;
         }
         pub fn update_enqueued(self: *Self, n: usize) void {
             self.advance_cursor(&self.wcursor, n);
             self._len += n;
+            self.validate_cursors();
         }
         pub fn update_dequeued(self: *Self, n: usize) void {
+            if (toolbox.IS_DEBUG) {
+                @memset(self.data[self.rcursor .. self.rcursor + n], undefined);
+            }
             self.advance_cursor(&self.rcursor, n);
             self._len -= n;
+            self.validate_cursors();
         }
         pub inline fn len(self: Self) usize {
-            return self._len;
+            var result: usize = 0;
+            if (self.wcursor >= self.rcursor) {
+                result = self.wcursor - self.rcursor;
+            } else {
+                result = (self.cap() + 1 - self.rcursor) + self.wcursor;
+            }
+            return result;
         }
         pub inline fn cap(self: Self) usize {
-            const result = self.data.len / 2;
+            if (self.data.len == 0) {
+                return 0;
+            }
+            const result = (self.data.len / 2) - 1;
             return result;
         }
         pub inline fn unoccupied(self: Self) usize {
@@ -174,7 +191,19 @@ pub fn MagicRingQueue(T: type) type {
             self._len = 0;
         }
         inline fn advance_cursor(self: Self, i: *usize, n: usize) void {
-            i.* = (i.* + n) & (self.cap() - 1);
+            i.* = (i.* + n) & self.cap();
+        }
+
+        fn validate_cursors(self: Self) void {
+            if (comptime toolbox.IS_DEBUG) {
+                const expected = self._len;
+                const actual = self.len();
+                toolbox.asserteq(
+                    expected,
+                    actual,
+                    "Unexpected ring queue len",
+                );
+            }
         }
     };
 }
@@ -183,69 +212,121 @@ pub fn NotMagicRingQueue(T: type) type {
         data: []T = toolbox.z([]T),
         rcursor: usize = 0,
         wcursor: usize = 0,
-        _len: usize = 0,
+        _len: usize = 0, // for debugger purposes only
+        //TODO
+        // lock: std.Thread.Mutex = .{},
 
         const Self = @This();
 
         pub fn enqueue(self: *Self, in: []const T) void {
-            if (self.cap() - self._len < in.len) {
-                toolbox.panic(
-                    "Queue is full. Capacity: {}. Tried to enqueue: {}",
-                    .{ self.cap(), in.len },
-                );
-            }
-            const buffer = self.enqueue_buffer(in.len);
-            @memcpy(buffer, in[0..buffer.len]);
-            self.update_enqueued(buffer.len);
+            toolbox.expect(self.unoccupied() >= in.len, "Queue full!", .{});
+            var buf = self.enqueue_buffer();
+            var n = @min(buf.len, in.len);
+            @memcpy(buf[0..n], in[0..n]);
+            self.update_enqueued(n);
 
-            if (buffer.len < in.len) {
-                const n_left = in.len - buffer.len;
-                const buffer2 = self.enqueue_buffer(n_left);
-                @memcpy(buffer2, in[buffer.len..]);
-                self.update_enqueued(buffer2.len);
+            if (buf.len < in.len) {
+                const cursor = buf.len;
+                const left = in.len - cursor;
+                buf = self.enqueue_buffer();
+                toolbox.expect(buf.len >= left, "Nooo!", .{});
+                n = @min(buf.len, left);
+                @memcpy(buf[0..n], in[cursor..]);
+                self.update_enqueued(n);
             }
         }
         pub fn dequeue(self: *Self, out: []T) []T {
-            const result = self.peek(out);
-            self.update_dequeued(result.len);
+            const to_dequeue = @min(out.len, self.len());
+            var left = to_dequeue;
+            var buf = self.dequeue_buffer();
+            const first_part = @min(buf.len, out.len);
+            @memcpy(out[0..first_part], buf[0..first_part]);
+            self.update_dequeued(first_part);
+            left -= first_part;
+            if (left > 0) {
+                buf = self.dequeue_buffer();
+                const second_part = @min(buf.len, left);
+                @memcpy(
+                    out[first_part .. first_part + second_part],
+                    buf[0..second_part],
+                );
+                self.update_dequeued(second_part);
+            }
+            const result = out[0..to_dequeue];
             return result;
         }
         pub fn peek(self: *Self, out: []T) []T {
-            const n = @min(out.len, self._len);
-            const result = out[0..n];
-            const buffer = self.dequeue_buffer(n);
-            @memcpy(result[0..buffer.len], buffer);
-
-            if (buffer.len < n) {
-                const n_left = n - buffer.len;
-                const buffer2 = self.data[0..n_left];
-                @memcpy(result[buffer.len..], buffer2);
+            const to_dequeue = @min(out.len, self.len());
+            var left = to_dequeue;
+            var buf = self.dequeue_buffer();
+            const first_part = @min(buf.len, out.len);
+            @memcpy(out[0..first_part], buf[0..first_part]);
+            left -= first_part;
+            if (left > 0) {
+                buf = self.data[0..@min(left, self.wcursor - 1)];
+                const second_part = @min(buf.len, left);
+                @memcpy(
+                    out[first_part .. first_part + second_part],
+                    buf[0..second_part],
+                );
             }
+            const result = out[0..to_dequeue];
             return result;
         }
-        pub inline fn enqueue_buffer(self: *Self, at_most_n: usize) []T {
-            const n = @min(self.cap() - self.wcursor, at_most_n);
+        pub fn enqueue_one(self: *Self, value: T) void {
+            var store = [1]T{value};
+            self.enqueue(&store);
+        }
+
+        pub fn dequeue_one(self: *Self) ?T {
+            var store = [1]T{undefined};
+            const slice = self.dequeue(&store);
+            if (slice.len > 0) {
+                return slice[0];
+            } else {
+                return null;
+            }
+        }
+
+        pub inline fn enqueue_buffer(self: *Self) []T {
+            const n = @min(self.unoccupied(), self.data.len - self.wcursor);
             const result = self.data[self.wcursor .. self.wcursor + n];
             return result;
         }
-        pub inline fn dequeue_buffer(self: *Self, at_most_n: usize) []T {
-            const n = @min(self.cap() - self.rcursor, at_most_n);
+        pub inline fn dequeue_buffer(self: *Self) []T {
+            const n = @min(self.len(), self.data.len - self.rcursor);
             const result = self.data[self.rcursor .. self.rcursor + n];
             return result;
         }
         pub fn update_enqueued(self: *Self, n: usize) void {
             self.advance_cursor(&self.wcursor, n);
             self._len += n;
+            self.validate_cursors();
         }
         pub fn update_dequeued(self: *Self, n: usize) void {
+            if (toolbox.IS_DEBUG) {
+                @memset(self.data[self.rcursor .. self.rcursor + n], undefined);
+            }
             self.advance_cursor(&self.rcursor, n);
             self._len -= n;
+            self.validate_cursors();
         }
         pub inline fn len(self: Self) usize {
-            return self._len;
+            var result: usize = 0;
+            const wcursor = @atomicLoad(usize, &self.wcursor, .acquire);
+            const rcursor = @atomicLoad(usize, &self.rcursor, .acquire);
+            if (wcursor >= rcursor) {
+                result = wcursor - rcursor;
+            } else {
+                result = (self.cap() + 1 - rcursor) + wcursor;
+            }
+            return result;
         }
         pub inline fn cap(self: Self) usize {
-            const result = self.data.len;
+            if (self.data.len == 0) {
+                return 0;
+            }
+            const result = (self.data.len) - 1;
             return result;
         }
         pub inline fn unoccupied(self: Self) usize {
@@ -258,7 +339,19 @@ pub fn NotMagicRingQueue(T: type) type {
             self._len = 0;
         }
         inline fn advance_cursor(self: Self, i: *usize, n: usize) void {
-            i.* = (i.* + n) & (self.cap() - 1);
+            i.* = (i.* + n) & self.cap();
+        }
+
+        fn validate_cursors(self: Self) void {
+            if (comptime toolbox.IS_DEBUG) {
+                const expected = self._len;
+                const actual = self.len();
+                toolbox.asserteq(
+                    expected,
+                    actual,
+                    "Unexpected ring queue len",
+                );
+            }
         }
     };
 }

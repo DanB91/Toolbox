@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
 
     const emsdk = b.dependency("emsdk", .{});
 
-    if (!target.result.isWasm()) {
+    if (!target.result.cpu.arch.isWasm()) {
         const exe = b.addExecutable(.{
             .name = "toolbox_tests",
             .root_source_file = b.path(
@@ -38,13 +38,25 @@ pub fn build(b: *std.Build) void {
         run_step.dependOn(&run_cmd.step);
     } else {
         // for WASM, need to build the Zig code as static library, since linking happens via emcc
+        const wasm_target = b.resolveTargetQuery(.{
+            .cpu_arch = .wasm32,
+            .cpu_model = .{ .explicit = &std.Target.wasm.cpu.mvp },
+            .cpu_features_add = std.Target.wasm.featureSet(&.{
+                .atomics,
+                .bulk_memory,
+            }),
+            .os_tag = .emscripten,
+        });
         const wasm_exe = b.addStaticLibrary(.{
             .name = "toolbox_tests",
             .root_source_file = b.path("src/main.zig"),
-            .target = target,
+            .target = wasm_target,
             .optimize = optimize,
         });
         wasm_exe.linkLibC();
+
+        wasm_exe.root_module.single_threaded = false;
+        wasm_exe.shared_memory = true;
 
         // create a special emcc linker run step
         const link_step = try emLinkStep(b, .{
@@ -101,7 +113,7 @@ pub fn emLinkStep(b: *Build, options: EmLinkOptions) !*Build.Step.InstallDir {
     const emcc = b.addSystemCommand(&.{emcc_path});
     emcc.setName("emcc"); // hide emcc path
     if (options.optimize == .Debug) {
-        emcc.addArgs(&.{ "-Og", "-sSAFE_HEAP=1", "-sSTACK_OVERFLOW_CHECK=1" });
+        emcc.addArgs(&.{ "-O0", "-gsource-map", "-sSAFE_HEAP=0", "-sSTACK_OVERFLOW_CHECK=1", "-sUSE_OFFSET_CONVERTER=1" });
     } else {
         emcc.addArg("-sASSERTIONS=0");
         if (options.optimize == .ReleaseSmall) {
@@ -116,6 +128,19 @@ pub fn emLinkStep(b: *Build, options: EmLinkOptions) !*Build.Step.InstallDir {
             emcc.addArgs(&.{ "--closure", "1" });
         }
     }
+    emcc.addArgs(&.{
+        "-pthread",
+        "-sASYNCIFY",
+        "-sPTHREAD_POOL_SIZE=16",
+        "-sINITIAL_MEMORY=2147483648",
+        //"-sALLOW_MEMORY_GROWTH",
+        "-sUSE_OFFSET_CONVERTER",
+        "-lwebsocket.js",
+        "-sPROXY_POSIX_SOCKETS",
+        "-sASSERTIONS",
+        // "-sFORCE_FILESYSTEM",
+        //"-sPROXY_TO_PTHREAD",
+    });
     if (!options.use_filesystem) {
         emcc.addArg("-sNO_FILESYSTEM=1");
     }
@@ -132,11 +157,11 @@ pub fn emLinkStep(b: *Build, options: EmLinkOptions) !*Build.Step.InstallDir {
     // add the main lib, and then scan for library dependencies and add those too
     emcc.addArtifactArg(options.lib_main);
 
-    for (options.lib_main.getCompileDependencies(false)) |item| {
-        if (item.kind == .lib) {
-            emcc.addArtifactArg(item);
-        }
-    }
+    // for (options.lib_main.getCompileDependencies(false)) |item| {
+    //     if (item.kind == .lib) {
+    //         emcc.addArtifactArg(item);
+    //     }
+    // }
     emcc.addArg("-o");
     const out_file = emcc.addOutputFileArg(b.fmt("{s}.html", .{options.lib_main.name}));
 

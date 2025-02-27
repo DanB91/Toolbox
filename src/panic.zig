@@ -4,7 +4,7 @@ const toolbox = @import("toolbox.zig");
 
 pub const panic_handler = switch (toolbox.THIS_PLATFORM) {
     .Playdate => playdate_panic,
-    else => std.debug.FormattedPanic.call,
+    else => std.debug.FullPanic(std.debug.defaultPanic),
 };
 
 pub fn playdate_panic(

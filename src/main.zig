@@ -526,9 +526,8 @@ fn run_tests(arena: *toolbox.Arena) !void {
     //ring queue
     {
         defer arena.reset();
-        const desired_cap = 1024;
-        var q = toolbox.make_not_magic_ring_queue(u64, desired_cap, arena);
-        defer toolbox.free_not_magic_ring_queue(q);
+        const desired_cap = 1023;
+        var q = toolbox.make_not_magic_ring_queue(u64, desired_cap + 1, arena);
         toolbox.expect(
             q.cap() >= desired_cap,
             "Unexpected magic ring queue capacity {}. Expected at least {}",
@@ -536,43 +535,44 @@ fn run_tests(arena: *toolbox.Arena) !void {
         );
         var n: usize = 3;
         var total_items: u64 = 0;
+        var expected_len: usize = 0;
+        var expected_dequeued: u64 = 0;
+        var expected_enqueued: u64 = 0;
         while (total_items < q.cap() * 2) {
             const in = arena.push_slice(u64, n);
-            for (in, 0..) |*d, i| d.* = i;
+            for (in, 0..) |*d, i| d.* = expected_enqueued + i;
+            expected_enqueued += in.len;
             q.enqueue(in);
-            toolbox.expecteq(
-                in.len,
-                q.len(),
-                "Bad value from q.slots_used()",
-            );
+            expected_len += in.len;
 
-            const out_buffer = arena.push_slice(u64, n);
+            const out_buffer = arena.push_slice(u64, @max(n / 2, q.len() / 3));
             const out = q.dequeue(out_buffer);
+            expected_len -= out.len;
             toolbox.expecteq(
-                in.len,
+                out_buffer.len,
                 out.len,
                 "Should have dequeued the expected amount",
             );
             for (out, 0..) |x, i| {
-                toolbox.expecteq(i, x, "unexpected value dequed");
+                toolbox.expecteq(expected_dequeued + i, x, "unexpected value dequed");
             }
+            expected_dequeued += out.len;
             toolbox.expecteq(
-                0,
+                expected_len,
                 q.len(),
                 "Bad value from q.len()",
             );
             total_items += n;
 
-            n *= 2;
-            n = @min(q.cap() - q.len(), n);
+            n += 1;
+            n = @min(q.unoccupied(), n);
         }
     }
     //magic ring queue
     if (comptime toolbox.THIS_HARDWARE != .WASM32) {
         defer arena.reset();
-        const desired_cap = 1024;
-        var q = toolbox.make_magic_ring_queue(u64, desired_cap, arena);
-        defer toolbox.free_magic_ring_queue(q);
+        const desired_cap = 1023;
+        var q = toolbox.make_magic_ring_queue(u64, desired_cap + 1, arena);
         toolbox.expect(
             q.cap() >= desired_cap,
             "Unexpected magic ring queue capacity {}. Expected at least {}",
@@ -580,35 +580,37 @@ fn run_tests(arena: *toolbox.Arena) !void {
         );
         var n: usize = 3;
         var total_items: u64 = 0;
+        var expected_len: usize = 0;
+        var expected_dequeued: u64 = 0;
+        var expected_enqueued: u64 = 0;
         while (total_items < q.cap() * 2) {
             const in = arena.push_slice(u64, n);
-            for (in, 0..) |*d, i| d.* = i;
+            for (in, 0..) |*d, i| d.* = expected_enqueued + i;
+            expected_enqueued += in.len;
             q.enqueue(in);
-            toolbox.expecteq(
-                in.len,
-                q.len(),
-                "Bad value from q.slots_used()",
-            );
+            expected_len += in.len;
 
-            const out_buffer = arena.push_slice(u64, n);
+            const out_buffer = arena.push_slice(u64, @max(n / 2, q.len() / 3));
             const out = q.dequeue(out_buffer);
+            expected_len -= out.len;
             toolbox.expecteq(
-                in.len,
+                out_buffer.len,
                 out.len,
                 "Should have dequeued the expected amount",
             );
             for (out, 0..) |x, i| {
-                toolbox.expecteq(i, x, "unexpected value dequed");
+                toolbox.expecteq(expected_dequeued + i, x, "unexpected value dequed");
             }
+            expected_dequeued += out.len;
             toolbox.expecteq(
-                0,
+                expected_len,
                 q.len(),
                 "Bad value from q.len()",
             );
             total_items += n;
 
-            n *= 2;
-            n = @min(q.cap() - q.len(), n);
+            n += 1;
+            n = @min(q.unoccupied(), n);
         }
     }
     //concurrent ring queue single thread test

@@ -27,6 +27,7 @@ pub const Arena = struct {
         .alloc = zstd_alloc,
         .resize = zstd_resize,
         .free = zstd_free,
+        .remap = zstd_remap,
     };
 
     pub fn init(size: usize) *Arena {
@@ -181,13 +182,13 @@ pub const Arena = struct {
     /// `ret_addr` is optionally provided as the first return address of the
     /// allocation call stack. If the value is `0` it means no return address
     /// has been provided.
-    fn zstd_alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
+    fn zstd_alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
         const ShiftSize = if (comptime @sizeOf(usize) == 8) u6 else u5;
 
         _ = ret_addr;
         const self: *toolbox.Arena = @ptrCast(@alignCast(ctx));
 
-        const alignment = @as(usize, 1) << @as(ShiftSize, @intCast(ptr_align));
+        const alignment = @as(usize, 1) << @as(ShiftSize, @intFromEnum(ptr_align));
         return self.push_bytes_aligned_runtime(len, alignment).ptr;
     }
 
@@ -206,7 +207,7 @@ pub const Arena = struct {
     /// `ret_addr` is optionally provided as the first return address of the
     /// allocation call stack. If the value is `0` it means no return address
     /// has been provided.
-    fn zstd_resize(ctx: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool {
+    fn zstd_resize(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
         _ = ret_addr;
         _ = buf_align;
         _ = ctx;
@@ -215,6 +216,34 @@ pub const Arena = struct {
         }
 
         return false;
+    }
+
+    /// Attempt to expand or shrink memory, allowing relocation.
+    ///
+    /// `memory.len` must equal the length requested from the most recent
+    /// successful call to `alloc`, `resize`, or `remap`. `alignment` must
+    /// equal the same value that was passed as the `alignment` parameter to
+    /// the original `alloc` call.
+    ///
+    /// A non-`null` return value indicates the resize was successful. The
+    /// allocation may have same address, or may have been relocated. In either
+    /// case, the allocation now has size of `new_len`. A `null` return value
+    /// indicates that the resize would be equivalent to allocating new memory,
+    /// copying the bytes from the old memory, and then freeing the old memory.
+    /// In such case, it is more efficient for the caller to perform the copy.
+    ///
+    /// `new_len` must be greater than zero.
+    ///
+    /// `ret_addr` is optionally provided as the first return address of the
+    /// allocation call stack. If the value is `0` it means no return address
+    /// has been provided.
+    pub fn zstd_remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const resized = zstd_resize(ctx, memory, alignment, new_len, ret_addr);
+        if (resized) {
+            return memory.ptr;
+        }
+
+        return null;
     }
 
     /// Free and invalidate a buffer.
@@ -228,7 +257,7 @@ pub const Arena = struct {
     /// `ret_addr` is optionally provided as the first return address of the
     /// allocation call stack. If the value is `0` it means no return address
     /// has been provided.
-    fn zstd_free(ctx: *anyopaque, buf: []u8, buf_align: u8, ret_addr: usize) void {
+    fn zstd_free(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ret_addr: usize) void {
         _ = ret_addr;
         _ = buf_align;
         _ = buf;
@@ -299,7 +328,7 @@ pub const Arena = struct {
 };
 pub fn get_scratch_arena(conflict_arena_opt: ?*toolbox.Arena) *toolbox.Arena {
     const SCRATCH_ARENA_SIZE = if (comptime toolbox.THIS_HARDWARE != .Playdate)
-        toolbox.mb(16)
+        toolbox.mb(64)
     else
         toolbox.kb(32);
 
