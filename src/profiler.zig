@@ -58,12 +58,13 @@ pub fn start_profiler() void {
     }
     g_state = .{};
     g_state.is_running = true;
-    g_is_running = true;
+    @atomicStore(bool, &g_is_running, true, .release);
     g_state.start = toolbox.now();
 }
 
 pub fn begin(comptime label: []const u8) void {
-    if ((comptime !ENABLE_PROFILER) or !g_is_running or !g_state.is_running) {
+    const is_running = @atomicLoad(bool, &g_is_running, .acquire);
+    if ((comptime !ENABLE_PROFILER) or !is_running or !g_state.is_running) {
         return;
     }
     const StaticVars = struct {
@@ -107,7 +108,8 @@ pub fn begin(comptime label: []const u8) void {
 }
 
 pub fn end() void {
-    if ((comptime !ENABLE_PROFILER) or !g_is_running or !g_state.is_running) {
+    const is_running = @atomicLoad(bool, &g_is_running, .acquire);
+    if ((comptime !ENABLE_PROFILER) or !is_running or !g_state.is_running) {
         return;
     }
     const end_time = toolbox.now();
@@ -133,7 +135,8 @@ pub fn end() void {
 }
 
 pub fn end_profiler() void {
-    if ((comptime !ENABLE_PROFILER) or !g_is_running) {
+    const is_running = @atomicLoad(bool, &g_is_running, .acquire);
+    if ((comptime !ENABLE_PROFILER) or !is_running) {
         return;
     }
     g_state.end = toolbox.now();
