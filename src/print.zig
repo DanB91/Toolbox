@@ -17,6 +17,11 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
 pub fn printerr(comptime fmt: []const u8, args: anytype) void {
     platform_print_to_console(fmt, args, true, true);
 }
+pub fn tprint(comptime fmt: []const u8, args: anytype) toolbox.String8 {
+    const arena = toolbox.get_scratch_arena(null);
+    const ret = toolbox.str8fmt(fmt, args, arena);
+    return ret;
+}
 
 pub fn panic(comptime fmt: []const u8, args: anytype) noreturn {
     var buffer = [_]u8{0} ** 2048;

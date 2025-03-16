@@ -318,6 +318,7 @@ pub const Arena = struct {
 
     pub fn reset(arena: *Arena) void {
         arena.pos = 0;
+        arena.current_save = 0;
     }
 
     pub fn free_all(arena: *Arena) void {
@@ -326,32 +327,27 @@ pub const Arena = struct {
         }
     }
 };
+
+//scratch areneas
+threadlocal var g_scratch_arenas: [2]?*Arena = [_]?*Arena{null} ** 2;
 pub fn get_scratch_arena(conflict_arena_opt: ?*toolbox.Arena) *toolbox.Arena {
-    const SCRATCH_ARENA_SIZE = if (comptime toolbox.THIS_HARDWARE != .Playdate)
+    const SCRATCH_ARENA_SIZE = if (comptime toolbox.THIS_PLATFORM != .Playdate)
         toolbox.mb(64)
     else
         toolbox.kb(32);
 
-    const ThreadLocalVars = if (comptime toolbox.THIS_HARDWARE != .Playdate)
-        struct {
-            threadlocal var scratch_arenas: [2]?*Arena = [_]?*Arena{null} ** 2;
-        }
-    else
-        struct {
-            var scratch_arenas: [2]?*Arena = [_]?*Arena{null} ** 2;
-        };
-    for (ThreadLocalVars.scratch_arenas, 0..) |arena_opt, i| {
+    for (g_scratch_arenas, 0..) |arena_opt, i| {
         if (arena_opt) |arena| {
             if (conflict_arena_opt) |conflict_arena| {
                 if (arena == conflict_arena) {
                     const ret_index = i ^ 1;
-                    const ret_opt = ThreadLocalVars.scratch_arenas[ret_index];
+                    const ret_opt = g_scratch_arenas[ret_index];
                     if (ret_opt) |ret| {
                         ret.save();
                         return ret;
                     } else {
                         const ret = toolbox.Arena.init(SCRATCH_ARENA_SIZE);
-                        ThreadLocalVars.scratch_arenas[ret_index] = ret;
+                        g_scratch_arenas[ret_index] = ret;
                         ret.save();
                         return ret;
                     }
@@ -365,12 +361,20 @@ pub fn get_scratch_arena(conflict_arena_opt: ?*toolbox.Arena) *toolbox.Arena {
             }
         } else {
             const ret = toolbox.Arena.init(SCRATCH_ARENA_SIZE);
-            ThreadLocalVars.scratch_arenas[i] = ret;
+            g_scratch_arenas[i] = ret;
             ret.save();
             return ret;
         }
     }
     unreachable;
+}
+
+pub fn reset_scratch_arena() void {
+    for (g_scratch_arenas) |arena| {
+        if (arena) |a| {
+            a.reset();
+        }
+    }
 }
 
 pub fn PoolAllocator(comptime T: type) type {

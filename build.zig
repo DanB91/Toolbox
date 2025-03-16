@@ -24,6 +24,7 @@ pub fn build(b: *std.Build) void {
             ),
             .target = target,
             .optimize = optimize,
+            .sanitize_thread = true,
         });
         exe.linkLibC();
         b.installArtifact(exe);
@@ -67,7 +68,7 @@ pub fn build(b: *std.Build) void {
             .use_emmalloc = true,
             .use_filesystem = false,
             .shell_file_path = null, //b.path("src/sokol/web/shell.html"),
-            .extra_args = &.{ "-sSTACK_SIZE=512KB", "-sASSERTIONS", "-sALLOW_MEMORY_GROWTH" },
+            .extra_args = &.{ "-sSTACK_SIZE=512KB", "-sASSERTIONS" },
         });
         // ...and a special run step to run the build result via emrun
         const run_cmd = emRunStep(

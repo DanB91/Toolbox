@@ -6,7 +6,8 @@
     //
     // It is redundant to include "zig" in this name because it is already
     // within the Zig package namespace.
-    .name = "toolbox",
+    .name = .toolbox,
+    .fingerprint = 0xe193afc65e12abf6,
 
     .dependencies = .{
         .emsdk = .{

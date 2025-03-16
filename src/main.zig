@@ -542,11 +542,11 @@ fn run_tests(arena: *toolbox.Arena) !void {
             const in = arena.push_slice(u64, n);
             for (in, 0..) |*d, i| d.* = expected_enqueued + i;
             expected_enqueued += in.len;
-            q.enqueue(in);
+            _ = q.enqueue(in, .PanicIfFullOrEmpty);
             expected_len += in.len;
 
             const out_buffer = arena.push_slice(u64, @max(n / 2, q.len() / 3));
-            const out = q.dequeue(out_buffer);
+            const out = q.dequeue(out_buffer, .PanicIfFullOrEmpty);
             expected_len -= out.len;
             toolbox.expecteq(
                 out_buffer.len,
@@ -587,11 +587,11 @@ fn run_tests(arena: *toolbox.Arena) !void {
             const in = arena.push_slice(u64, n);
             for (in, 0..) |*d, i| d.* = expected_enqueued + i;
             expected_enqueued += in.len;
-            q.enqueue(in);
+            _ = q.enqueue(in, .PanicIfFullOrEmpty);
             expected_len += in.len;
 
             const out_buffer = arena.push_slice(u64, @max(n / 2, q.len() / 3));
-            const out = q.dequeue(out_buffer);
+            const out = q.dequeue(out_buffer, .PanicIfFullOrEmpty);
             expected_len -= out.len;
             toolbox.expecteq(
                 out_buffer.len,
@@ -613,26 +613,7 @@ fn run_tests(arena: *toolbox.Arena) !void {
             n = @min(q.unoccupied(), n);
         }
     }
-    //concurrent ring queue single thread test
-    {
-        defer arena.reset();
-        var ring_queue = toolbox.MultiProducerMultiConsumerRingQueue(i64).init(8, arena);
-        for (0..10) |u| {
-            const i = @as(i64, @intCast(u));
-            ring_queue.force_enqueue(i);
-        }
-        var expected: i64 = 3;
-        while (ring_queue.dequeue()) |got| {
-            toolbox.expect(
-                expected == got,
-                "Unexpected ring queue value.  Expected: {}, Got: {}",
-                .{ expected, got },
-            );
-            expected += 1;
-        }
-    }
-    //MultiProducerMultiConsumerRingQueue multi thread test
-    //TODO: remove for now
+    //RingQueue multi thread test
     if (comptime toolbox.THIS_HARDWARE != .WASM32) {
         defer arena.reset();
 
@@ -644,15 +625,14 @@ fn run_tests(arena: *toolbox.Arena) !void {
         const NUM_CONSUMERS = 10;
         const MAX_VALUE_DEQUEUED = 0xFFFF;
 
-        var producers_running: isize = 0;
+        var producers_running: std.atomic.Value(isize) = .{ .raw = 0 };
         var producers: [NUM_PRODUCERS]std.Thread = undefined;
         var consumers: [NUM_CONSUMERS]std.Thread = undefined;
         var max_value_dequeued = [_]i64{0} ** NUM_PRODUCERS;
-        var ring_queue =
-            toolbox.MultiProducerMultiConsumerRingQueue(TestData).init(64, arena);
+        var ring_queue = toolbox.make_concurrent_ring_queue(TestData, 1023, arena);
 
         for (&producers, 0..) |*p, i| {
-            producers_running += 1;
+            _ = producers_running.fetchAdd(1, .acq_rel);
             p.* = try std.Thread.spawn(.{}, concurrent_queue_enqueue_test_loop, .{
                 &ring_queue,
                 &producers_running,
@@ -888,30 +868,28 @@ fn profiler_fn2(n: isize) void {
 }
 fn concurrent_queue_enqueue_test_loop(
     ring_queue: anytype,
-    producers_running: *isize,
+    producers_running: *std.atomic.Value(isize),
     thread_id: usize,
     comptime max_value: i64,
 ) void {
     for (0..max_value + 1) |n| {
-        while (!ring_queue.enqueue(.{ .n = @intCast(n), .thread_id = thread_id })) {
-            std.atomic.spinLoopHint();
-        }
+        _ = ring_queue.enqueue_one(.{ .n = @intCast(n), .thread_id = thread_id }, .Block);
     }
-    _ = @atomicRmw(isize, producers_running, .Sub, 1, .monotonic);
+    _ = producers_running.fetchSub(1, .acq_rel);
 }
 fn concurrent_queue_dequeue_test_loop(
     ring_queue: anytype,
-    producers_running: *isize,
+    producers_running: *std.atomic.Value(isize),
     max_value_dequeued: []i64,
     comptime num_producers: usize,
 ) void {
     var last_actual = [_]i64{-1} ** num_producers;
 
     var data_left = true;
-    while (@atomicLoad(isize, producers_running, .monotonic) > 0 or
+    while (producers_running.load(.acquire) > 0 or
         data_left)
     {
-        if (ring_queue.dequeue()) |test_data| {
+        if (ring_queue.dequeue_one(.AsMuchAsYouCan)) |test_data| {
             data_left = true;
             const thread_id: usize = test_data.thread_id;
             const actual = test_data.n;
